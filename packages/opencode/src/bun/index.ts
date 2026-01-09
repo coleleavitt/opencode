@@ -60,18 +60,29 @@ export namespace BunProc {
     }),
   )
 
-  export async function install(pkg: string, version = "latest") {
+  export async function install(pkg: string, version = "latest", isGitUrl = false) {
     // Use lock to ensure only one install at a time
     using _ = await Lock.write("bun-install")
 
-    const mod = path.join(Global.Path.cache, "node_modules", pkg)
+    // For git URLs, extract the package name from the repo URL for the module path
+    // e.g., git+https://github.com/user/repo-name.git -> repo-name
+    let modName = pkg
+    if (isGitUrl) {
+      const match = pkg.match(/\/([^\/]+?)(\.git)?$/)
+      if (match) {
+        modName = match[1]
+      }
+    }
+
+    const mod = path.join(Global.Path.cache, "node_modules", modName)
     const pkgjson = Bun.file(path.join(Global.Path.cache, "package.json"))
     const parsed = await pkgjson.json().catch(async () => {
       const result = { dependencies: {} }
       await Bun.write(pkgjson.name!, JSON.stringify(result, null, 2))
       return result
     })
-    if (parsed.dependencies[pkg] === version) return mod
+    // Use modName for cache check (matches the key used when storing)
+    if (parsed.dependencies[modName] === version) return mod
 
     const proxied = !!(
       process.env.HTTP_PROXY ||
@@ -81,6 +92,8 @@ export namespace BunProc {
     )
 
     // Build command arguments
+    // For git URLs, don't append @version - pass the URL directly
+    const pkgSpec = isGitUrl ? pkg : pkg + "@" + version
     const args = [
       "add",
       "--force",
@@ -89,7 +102,7 @@ export namespace BunProc {
       ...(proxied ? ["--no-cache"] : []),
       "--cwd",
       Global.Path.cache,
-      pkg + "@" + version,
+      pkgSpec,
     ]
 
     // Let Bun handle registry resolution:
@@ -123,7 +136,8 @@ export namespace BunProc {
       }
     }
 
-    parsed.dependencies[pkg] = resolvedVersion
+    // Use modName (extracted package name) for dependency key, not the git URL
+    parsed.dependencies[modName] = resolvedVersion
     await Bun.write(pkgjson.name!, JSON.stringify(parsed, null, 2))
     return mod
   }

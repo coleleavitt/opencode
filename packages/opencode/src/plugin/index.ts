@@ -29,18 +29,42 @@ export namespace Plugin {
       serverUrl: Server.url(),
       $: Bun.$,
     }
-    const plugins = [...(config.plugin ?? [])]
-    if (!Flag.OPENCODE_DISABLE_DEFAULT_PLUGINS) {
-      plugins.push(...BUILTIN)
+    // Helper to extract package name from various plugin formats
+    const getPackageName = (plugin: string): string | null => {
+      if (plugin.startsWith("file://")) return null
+      // For git URLs, extract repo name: git+https://github.com/user/repo-name.git -> repo-name
+      if (plugin.startsWith("git+")) {
+        const match = plugin.match(/\/([^\/]+?)(\.git)?$/)
+        return match ? match[1] : null
+      }
+      // For npm packages: package-name@version -> package-name
+      const lastAtIndex = plugin.lastIndexOf("@")
+      return lastAtIndex > 0 ? plugin.substring(0, lastAtIndex) : plugin
     }
+
+    const userPlugins = [...(config.plugin ?? [])]
+    const userPackageNames = new Set(userPlugins.map(getPackageName).filter(Boolean))
+
+    // Filter out BUILTIN plugins that the user has already specified (by package name)
+    const filteredBuiltins = Flag.OPENCODE_DISABLE_DEFAULT_PLUGINS
+      ? []
+      : BUILTIN.filter((b) => {
+          const builtinName = getPackageName(b)
+          return builtinName && !userPackageNames.has(builtinName)
+        })
+
+    const plugins = [...userPlugins, ...filteredBuiltins]
     for (let plugin of plugins) {
       log.info("loading plugin", { path: plugin })
       if (!plugin.startsWith("file://")) {
-        const lastAtIndex = plugin.lastIndexOf("@")
+        // Handle git+ URLs (e.g., git+https://github.com/..., git+ssh://...)
+        // These should be passed directly to bun without @version parsing
+        const isGitUrl = plugin.startsWith("git+")
+        const lastAtIndex = isGitUrl ? -1 : plugin.lastIndexOf("@")
         const pkg = lastAtIndex > 0 ? plugin.substring(0, lastAtIndex) : plugin
         const version = lastAtIndex > 0 ? plugin.substring(lastAtIndex + 1) : "latest"
         const builtin = BUILTIN.some((x) => x.startsWith(pkg + "@"))
-        plugin = await BunProc.install(pkg, version).catch((err) => {
+        plugin = await BunProc.install(pkg, version, isGitUrl).catch((err) => {
           if (builtin) return ""
           throw err
         })
