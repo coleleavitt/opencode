@@ -1,6 +1,6 @@
 import { Log } from "../util/log"
 import path from "path"
-import { pathToFileURL } from "url"
+import { fileURLToPath, pathToFileURL } from "url"
 import os from "os"
 import z from "zod"
 import { Filesystem } from "../util/filesystem"
@@ -18,7 +18,7 @@ import { LSPServer } from "../lsp/server"
 import { BunProc } from "@/bun"
 import { Installation } from "@/installation"
 import { ConfigMarkdown } from "./markdown"
-import { existsSync } from "fs"
+import { existsSync, readFileSync } from "fs"
 import { Bus } from "@/bus"
 
 export namespace Config {
@@ -354,19 +354,67 @@ export namespace Config {
     return plugins
   }
 
+  function findPackageJsonName(filePath: string): string | undefined {
+    let dir = path.dirname(filePath)
+    const root = path.parse(dir).root
+
+    for (let i = 0; i < 5 && dir !== root; i++) {
+      const pkgPath = path.join(dir, "package.json")
+      if (existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"))
+          if (pkg.name && typeof pkg.name === "string") {
+            return pkg.name
+          }
+        } catch {
+          // Invalid JSON, continue searching up
+        }
+      }
+      dir = path.dirname(dir)
+    }
+
+    return undefined
+  }
+
   /**
    * Extracts a canonical plugin name from a plugin specifier.
-   * - For file:// URLs: extracts filename without extension
+   * - For file:// URLs: reads package.json name (cross-platform, canonical), falls back to path heuristic
    * - For npm packages: extracts package name without version
    *
    * @example
-   * getPluginName("file:///path/to/plugin/foo.js") // "foo"
+   * getPluginName("file:///path/to/oh-my-opencode/dist/index.js") // "oh-my-opencode" (from package.json)
+   * getPluginName("file:///path/to/plugin/foo.js") // "foo" (no package.json, uses filename)
    * getPluginName("oh-my-opencode@2.4.3") // "oh-my-opencode"
    * getPluginName("@scope/pkg@1.0.0") // "@scope/pkg"
    */
   export function getPluginName(plugin: string): string {
     if (plugin.startsWith("file://")) {
-      return path.parse(new URL(plugin).pathname).name
+      const filePath = fileURLToPath(plugin)
+
+      const packageName = findPackageJsonName(filePath)
+      if (packageName) {
+        return packageName
+      }
+
+      const parsed = path.parse(filePath)
+      const filename = parsed.name
+      const genericNames = new Set(["index", "main", "plugin", "dist", "build", "out", "lib"])
+
+      if (!genericNames.has(filename)) {
+        return filename
+      }
+
+      let dir = path.dirname(filePath)
+      const root = path.parse(dir).root
+      for (let i = 0; i < 5 && dir !== root; i++) {
+        const dirName = path.basename(dir)
+        if (!genericNames.has(dirName) && dirName !== ".opencode") {
+          return dirName
+        }
+        dir = path.dirname(dir)
+      }
+
+      return plugin
     }
     const lastAt = plugin.lastIndexOf("@")
     if (lastAt > 0) {
@@ -1194,6 +1242,7 @@ export namespace Config {
       if (data.plugin) {
         for (let i = 0; i < data.plugin.length; i++) {
           const plugin = data.plugin[i]
+          if (plugin.startsWith("file://")) continue // Already absolute
           try {
             data.plugin[i] = import.meta.resolve!(plugin, configFilepath)
           } catch (err) {}
