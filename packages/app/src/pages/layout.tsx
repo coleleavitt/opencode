@@ -75,6 +75,8 @@ import { DialogEditProject } from "@/components/dialog-edit-project"
 import { Titlebar } from "@/components/titlebar"
 import { useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
+import { useAuth } from "@/context/auth"
+import { Popover } from "@opencode-ai/ui/popover"
 
 export default function Layout(props: ParentProps) {
   const [store, setStore, , ready] = persisted(
@@ -110,6 +112,7 @@ export default function Layout(props: ParentProps) {
   const command = useCommand()
   const theme = useTheme()
   const language = useLanguage()
+  const auth = useAuth()
   const initialDirectory = decode64(params.dir)
   const availableThemeEntries = createMemo(() => Object.entries(theme.themes()))
   const colorSchemeOrder: ColorScheme[] = ["system", "light", "dark"]
@@ -2889,6 +2892,26 @@ export default function Layout(props: ParentProps) {
                 aria-label={language.t("sidebar.help")}
               />
             </Tooltip>
+            <Show when={auth.authenticated()}>
+              <Popover
+                title={auth.user()?.username}
+                description={`Role: ${auth.user()?.role}`}
+                placement={sidebarProps.mobile ? "bottom" : "right"}
+                gutter={6}
+                class="rounded-xl min-w-[180px]"
+                triggerAs={IconButton}
+                triggerProps={{
+                  icon: "brain" as const,
+                  variant: "ghost" as const,
+                  size: "large" as const,
+                  "aria-label": "Account",
+                }}
+              >
+                <Button variant="secondary" class="w-full" onClick={auth.logout}>
+                  Sign Out
+                </Button>
+              </Popover>
+            </Show>
           </div>
         </div>
 

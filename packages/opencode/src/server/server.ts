@@ -6,7 +6,9 @@ import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { streamSSE } from "hono/streaming"
 import { proxy } from "hono/proxy"
-import { basicAuth } from "hono/basic-auth"
+import { AuthMiddleware } from "./auth/middleware"
+import { WebAuthRoutes } from "./routes/web-auth"
+import { UserStore } from "./auth/user"
 import z from "zod"
 import { Provider } from "../provider/provider"
 import { NamedError } from "@opencode-ai/util/error"
@@ -77,29 +79,6 @@ export namespace Server {
             status: 500,
           })
         })
-        .use((c, next) => {
-          const password = Flag.OPENCODE_SERVER_PASSWORD
-          if (!password) return next()
-          const username = Flag.OPENCODE_SERVER_USERNAME ?? "opencode"
-          return basicAuth({ username, password })(c, next)
-        })
-        .use(async (c, next) => {
-          const skipLogging = c.req.path === "/log"
-          if (!skipLogging) {
-            log.info("request", {
-              method: c.req.method,
-              path: c.req.path,
-            })
-          }
-          const timer = log.time("request", {
-            method: c.req.method,
-            path: c.req.path,
-          })
-          await next()
-          if (!skipLogging) {
-            timer.stop()
-          }
-        })
         .use(
           cors({
             origin(input) {
@@ -119,8 +98,28 @@ export namespace Server {
 
               return
             },
+            credentials: true,
           }),
         )
+        .route("/web-auth", WebAuthRoutes())
+        .use(AuthMiddleware.authenticate)
+        .use(async (c, next) => {
+          const skipLogging = c.req.path === "/log"
+          if (!skipLogging) {
+            log.info("request", {
+              method: c.req.method,
+              path: c.req.path,
+            })
+          }
+          const timer = log.time("request", {
+            method: c.req.method,
+            path: c.req.path,
+          })
+          await next()
+          if (!skipLogging) {
+            timer.stop()
+          }
+        })
         .route("/global", GlobalRoutes())
         .put(
           "/auth/:providerID",
@@ -563,6 +562,16 @@ export namespace Server {
     return result
   }
 
+  async function seedFromLegacyPassword() {
+    const password = Flag.OPENCODE_SERVER_PASSWORD
+    if (!password) return
+    const count = await UserStore.count()
+    if (count > 0) return
+    const username = Flag.OPENCODE_SERVER_USERNAME ?? "opencode"
+    await UserStore.create({ username, password, role: "admin" })
+    log.info("seeded admin from OPENCODE_SERVER_PASSWORD", { username })
+  }
+
   export function listen(opts: {
     port: number
     hostname: string
@@ -589,6 +598,7 @@ export namespace Server {
     if (!server) throw new Error(`Failed to start server on port ${opts.port}`)
 
     _url = server.url
+    seedFromLegacyPassword().catch((e) => log.error("seed failed", { error: e }))
 
     const shouldPublishMDNS =
       opts.mdns &&

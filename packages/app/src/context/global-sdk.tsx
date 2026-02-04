@@ -97,9 +97,20 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
       flush()
     })
 
+    const baseFetch = platform.fetch ?? fetch
+    const originalFetch = baseFetch
+    const authFetch: typeof fetch = ((...args: Parameters<typeof fetch>) => {
+      return originalFetch(...args).then((res: Response) => {
+        if (res.status === 401 && !String(args[0]).includes("/web-auth/")) {
+          window.location.href = "/web-auth/login-page"
+        }
+        return res
+      })
+    }) as typeof fetch
+
     const sdk = createOpencodeClient({
       baseUrl: server.url,
-      fetch: platform.fetch,
+      fetch: authFetch,
       throwOnError: true,
     })
 
