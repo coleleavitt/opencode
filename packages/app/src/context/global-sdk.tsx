@@ -102,7 +102,7 @@ export const { use: useGlobalSDK, provider: GlobalSDKProvider } = createSimpleCo
     const authFetch: typeof fetch = ((...args: Parameters<typeof fetch>) => {
       return originalFetch(...args).then((res: Response) => {
         if (res.status === 401 && !String(args[0]).includes("/web-auth/")) {
-          window.location.href = "/web-auth/login-page"
+          window.location.href = `${server.url}/web-auth/login-page`
         }
         return res
       })

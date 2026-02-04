@@ -11,6 +11,20 @@ import { Flag } from "../../flag/flag"
 
 const log = Log.create({ service: "web-auth" })
 
+async function resolveUser(c: import("hono").Context) {
+  const cookie = c.req.header("cookie")
+  if (!cookie) return undefined
+  const match = cookie.match(/(?:^|;\s*)opencode_session=([^;]+)/)
+  if (!match) return undefined
+  const payload = await WebSession.verify(match[1])
+  if (!payload) return undefined
+  return { id: payload.sub, username: payload.username, role: payload.role }
+}
+
+function sessionCookie(token: string, maxAge = 7 * 86400) {
+  return `opencode_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`
+}
+
 export const WebAuthRoutes = lazy(() =>
   new Hono()
     .post("/login", async (c) => {
@@ -34,12 +48,12 @@ export const WebAuthRoutes = lazy(() =>
       }
 
       const token = await WebSession.create({ id: user.id, username: user.username, role: user.role })
-      c.header("set-cookie", `opencode_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 86400}`)
+      c.header("set-cookie", sessionCookie(token))
       log.info("login", { username: user.username })
       return c.json({ token, user: { id: user.id, username: user.username, role: user.role } })
     })
     .post("/logout", async (c) => {
-      c.header("set-cookie", "opencode_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+      c.header("set-cookie", sessionCookie("", 0))
       return c.json({ ok: true })
     })
     .post("/setup", async (c) => {
@@ -60,7 +74,7 @@ export const WebAuthRoutes = lazy(() =>
 
       const user = await UserStore.create({ username: body.username, password: body.password, role: "admin" })
       const token = await WebSession.create({ id: user.id, username: user.username, role: "admin" })
-      c.header("set-cookie", `opencode_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 86400}`)
+      c.header("set-cookie", sessionCookie(token))
       log.info("setup", { username: user.username })
       return c.json({ token, user })
     })
@@ -77,7 +91,7 @@ export const WebAuthRoutes = lazy(() =>
       return c.html(LoginPage.setup())
     })
     .get("/me", async (c) => {
-      const u = AuthMiddleware.user(c)
+      const u = AuthMiddleware.user(c) ?? (await resolveUser(c))
       if (!u) return c.json({ error: "Unauthorized" }, 401)
       return c.json(u)
     })

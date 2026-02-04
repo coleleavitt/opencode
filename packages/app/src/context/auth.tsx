@@ -32,7 +32,7 @@ export const { use: useAuth, provider: AuthProvider } = createSimpleContext({
 
     const logout = async () => {
       await fetcher(`${server.url}/web-auth/logout`, { method: "POST", credentials: "include" }).catch(() => undefined)
-      window.location.href = "/web-auth/login-page"
+      window.location.href = `${server.url}/web-auth/login-page`
     }
 
     return { user, authenticated, checked, logout }
