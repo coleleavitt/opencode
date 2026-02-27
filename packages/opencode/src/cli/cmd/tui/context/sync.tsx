@@ -29,6 +29,135 @@ import { batch, onMount } from "solid-js"
 import { Log } from "@/util/log"
 import type { Path } from "@opencode-ai/sdk"
 
+// Streaming event batcher: batch ALL high-frequency events during streaming
+// to reduce store mutations and avoid GC pressure from markdown re-parsing.
+// Events are buffered and flushed every BATCH_FLUSH_MS in a single batch() call.
+const BATCH_FLUSH_MS = 100
+const pendingDeltas = new Map<string, Map<string, Map<string, string>>>()
+const pendingStatus = new Map<string, SessionStatus>()
+const pendingMessages = new Map<string, Message>()
+const pendingParts = new Map<string, Part>()
+const pendingTodos = new Map<string, Todo[]>()
+const pendingDiffs = new Map<string, import("@/snapshot").Snapshot.FileDiff[]>()
+let batchTimer: Timer | undefined
+
+function scheduleBatchFlush(setStore: any, store: any) {
+  if (batchTimer) return
+  batchTimer = setTimeout(() => {
+    batchTimer = undefined
+    // Snapshot and clear all pending state
+    const deltas = new Map(pendingDeltas)
+    const statuses = new Map(pendingStatus)
+    const messages = new Map(pendingMessages)
+    const parts = new Map(pendingParts)
+    const todos = new Map(pendingTodos)
+    const diffs = new Map(pendingDiffs)
+    pendingDeltas.clear()
+    pendingStatus.clear()
+    pendingMessages.clear()
+    pendingParts.clear()
+    pendingTodos.clear()
+    pendingDiffs.clear()
+
+    batch(() => {
+      // Flush session statuses
+      for (const [sessionID, status] of statuses) {
+        setStore("session_status", sessionID, status)
+      }
+
+      // Flush todos
+      for (const [sessionID, todoList] of todos) {
+        setStore("todo", sessionID, todoList)
+      }
+
+      // Flush diffs
+      for (const [sessionID, diff] of diffs) {
+        setStore("session_diff", sessionID, diff)
+      }
+
+      // Flush message updates
+      for (const [, info] of messages) {
+        const existing = store.message[info.sessionID]
+        if (!existing) {
+          setStore("message", info.sessionID, [info])
+          continue
+        }
+        const result = Binary.search(existing, info.id, (m: any) => m.id)
+        if (result.found) {
+          setStore("message", info.sessionID, result.index, reconcile(info))
+          continue
+        }
+        setStore(
+          "message",
+          info.sessionID,
+          produce((draft: any[]) => {
+            draft.splice(result.index, 0, info)
+          }),
+        )
+        const updated = store.message[info.sessionID]
+        if (updated.length > 100) {
+          const oldest = updated[0]
+          setStore(
+            "message",
+            info.sessionID,
+            produce((draft: any[]) => {
+              draft.shift()
+            }),
+          )
+          setStore(
+            "part",
+            produce((draft: any) => {
+              delete draft[oldest.id]
+            }),
+          )
+        }
+      }
+
+      // Flush part updates
+      for (const [, part] of parts) {
+        const existing = store.part[part.messageID]
+        if (!existing) {
+          setStore("part", part.messageID, [part])
+          continue
+        }
+        const result = Binary.search(existing, part.id, (p: any) => p.id)
+        if (result.found) {
+          setStore("part", part.messageID, result.index, reconcile(part))
+          continue
+        }
+        setStore(
+          "part",
+          part.messageID,
+          produce((draft: any[]) => {
+            draft.splice(result.index, 0, part)
+          }),
+        )
+      }
+
+      // Flush deltas (accumulated text appends)
+      for (const [msgID, partMap] of deltas) {
+        const existing = store.part[msgID]
+        if (!existing) continue
+        setStore(
+          "part",
+          msgID,
+          produce((draft: any[]) => {
+            for (const [pID, fields] of partMap) {
+              const idx = Binary.search(draft, pID, (p: any) => p.id)
+              if (!idx.found) continue
+              const p = draft[idx.index]
+              for (const [f, d] of fields) {
+                const key = f as keyof typeof p
+                ;(p[key] as string) = ((p[key] as string | undefined) ?? "") + d
+              }
+            }
+          }),
+        )
+      }
+    })
+  }, BATCH_FLUSH_MS)
+}
+
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
   init: () => {
@@ -186,11 +315,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         }
 
         case "todo.updated":
-          setStore("todo", event.properties.sessionID, event.properties.todos)
+          pendingTodos.set(event.properties.sessionID, event.properties.todos)
+          scheduleBatchFlush(setStore, store)
           break
 
         case "session.diff":
-          setStore("session_diff", event.properties.sessionID, event.properties.diff)
+          pendingDiffs.set(event.properties.sessionID, event.properties.diff)
+          scheduleBatchFlush(setStore, store)
           break
 
         case "session.deleted": {
@@ -221,47 +352,14 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         }
 
         case "session.status": {
-          setStore("session_status", event.properties.sessionID, event.properties.status)
+          pendingStatus.set(event.properties.sessionID, event.properties.status)
+          scheduleBatchFlush(setStore, store)
           break
         }
 
         case "message.updated": {
-          const messages = store.message[event.properties.info.sessionID]
-          if (!messages) {
-            setStore("message", event.properties.info.sessionID, [event.properties.info])
-            break
-          }
-          const result = Binary.search(messages, event.properties.info.id, (m) => m.id)
-          if (result.found) {
-            setStore("message", event.properties.info.sessionID, result.index, reconcile(event.properties.info))
-            break
-          }
-          setStore(
-            "message",
-            event.properties.info.sessionID,
-            produce((draft) => {
-              draft.splice(result.index, 0, event.properties.info)
-            }),
-          )
-          const updated = store.message[event.properties.info.sessionID]
-          if (updated.length > 100) {
-            const oldest = updated[0]
-            batch(() => {
-              setStore(
-                "message",
-                event.properties.info.sessionID,
-                produce((draft) => {
-                  draft.shift()
-                }),
-              )
-              setStore(
-                "part",
-                produce((draft) => {
-                  delete draft[oldest.id]
-                }),
-              )
-            })
-          }
+          pendingMessages.set(event.properties.info.id, event.properties.info)
+          scheduleBatchFlush(setStore, store)
           break
         }
         case "message.removed": {
@@ -279,45 +377,31 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           break
         }
         case "message.part.updated": {
-          const parts = store.part[event.properties.part.messageID]
-          if (!parts) {
-            setStore("part", event.properties.part.messageID, [event.properties.part])
-            break
-          }
-          const result = Binary.search(parts, event.properties.part.id, (p) => p.id)
-          if (result.found) {
-            setStore("part", event.properties.part.messageID, result.index, reconcile(event.properties.part))
-            break
-          }
-          setStore(
-            "part",
-            event.properties.part.messageID,
-            produce((draft) => {
-              draft.splice(result.index, 0, event.properties.part)
-            }),
-          )
+          pendingDeltas.get(event.properties.part.messageID)?.delete(event.properties.part.id)
+          pendingParts.set(event.properties.part.id, event.properties.part)
+          scheduleBatchFlush(setStore, store)
           break
         }
 
         case "message.part.delta": {
-          const parts = store.part[event.properties.messageID]
-          if (!parts) break
-          const result = Binary.search(parts, event.properties.partID, (p) => p.id)
-          if (!result.found) break
-          setStore(
-            "part",
-            event.properties.messageID,
-            produce((draft) => {
-              const part = draft[result.index]
-              const field = event.properties.field as keyof typeof part
-              const existing = part[field] as string | undefined
-              ;(part[field] as string) = (existing ?? "") + event.properties.delta
-            }),
-          )
+          const { messageID, partID, field, delta } = event.properties
+          let byMessage = pendingDeltas.get(messageID)
+          if (!byMessage) {
+            byMessage = new Map()
+            pendingDeltas.set(messageID, byMessage)
+          }
+          let byPart = byMessage.get(partID)
+          if (!byPart) {
+            byPart = new Map()
+            byMessage.set(partID, byPart)
+          }
+          byPart.set(field, (byPart.get(field) ?? "") + delta)
+          scheduleBatchFlush(setStore, store)
           break
         }
 
         case "message.part.removed": {
+          pendingDeltas.get(event.properties.messageID)?.delete(event.properties.partID)
           const parts = store.part[event.properties.messageID]
           const result = Binary.search(parts, event.properties.partID, (p) => p.id)
           if (result.found)
