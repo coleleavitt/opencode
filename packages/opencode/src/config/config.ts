@@ -24,7 +24,7 @@ import { LSPServer } from "../lsp/server"
 import { BunProc } from "@/bun"
 import { Installation } from "@/installation"
 import { ConfigMarkdown } from "./markdown"
-import { constants, existsSync } from "fs"
+import { constants, existsSync, readFileSync, realpathSync } from "fs"
 import { Bus } from "@/bus"
 import { GlobalBus } from "@/bus/global"
 import { Event } from "../server/event"
@@ -462,19 +462,46 @@ export namespace Config {
     return plugins
   }
 
+  function findPackageJsonName(filePath: string): string | undefined {
+    let dir = path.dirname(filePath)
+    const root = path.parse(dir).root
+
+    for (let i = 0; i < 5 && dir !== root; i++) {
+      const pkgPath = path.join(dir, "package.json")
+      if (existsSync(pkgPath)) {
+        try {
+          const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"))
+          if (pkg.name && typeof pkg.name === "string") {
+            return pkg.name
+          }
+        } catch {}
+      }
+      dir = path.dirname(dir)
+    }
+    return undefined
+  }
+
   /**
    * Extracts a canonical plugin name from a plugin specifier.
-   * - For file:// URLs: extracts filename without extension
+   * - For file:// URLs: uses package.json name if available, otherwise full canonical URL
    * - For npm packages: extracts package name without version
    *
    * @example
-   * getPluginName("file:///path/to/plugin/foo.js") // "foo"
+   * getPluginName("file:///path/to/oh-my-opencode/dist/index.js") // "oh-my-opencode"
    * getPluginName("oh-my-opencode@2.4.3") // "oh-my-opencode"
    * getPluginName("@scope/pkg@1.0.0") // "@scope/pkg"
    */
   export function getPluginName(plugin: string): string {
     if (plugin.startsWith("file://")) {
-      return path.parse(new URL(plugin).pathname).name
+      const filePath = fileURLToPath(plugin)
+      const pkgName = findPackageJsonName(filePath)
+      if (pkgName) return pkgName
+
+      try {
+        return pathToFileURL(realpathSync(filePath)).href
+      } catch {
+        return plugin
+      }
     }
     const lastAt = plugin.lastIndexOf("@")
     if (lastAt > 0) {

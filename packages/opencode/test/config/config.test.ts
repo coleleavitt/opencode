@@ -1601,10 +1601,38 @@ test("wellknown URL with trailing slash is normalized", async () => {
 })
 
 describe("getPluginName", () => {
-  test("extracts name from file:// URL", () => {
-    expect(Config.getPluginName("file:///path/to/plugin/foo.js")).toBe("foo")
-    expect(Config.getPluginName("file:///path/to/plugin/bar.ts")).toBe("bar")
-    expect(Config.getPluginName("file:///some/path/my-plugin.js")).toBe("my-plugin")
+  test("file:// URL without package.json returns full canonical URL", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Filesystem.write(path.join(dir, "standalone.js"), "export default {}")
+      },
+    })
+    const url = `file://${tmp.path}/standalone.js`
+    const result = Config.getPluginName(url)
+    expect(result.startsWith("file://")).toBe(true)
+    expect(result).toContain("standalone.js")
+  })
+
+  test("file:// URL with package.json returns package name", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Filesystem.write(path.join(dir, "package.json"), JSON.stringify({ name: "my-plugin" }))
+        await Filesystem.write(path.join(dir, "dist", "index.js"), "export default {}")
+      },
+    })
+    const url = `file://${tmp.path}/dist/index.js`
+    expect(Config.getPluginName(url)).toBe("my-plugin")
+  })
+
+  test("file:// URL with scoped package.json returns scoped name", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Filesystem.write(path.join(dir, "package.json"), JSON.stringify({ name: "@scope/pkg" }))
+        await Filesystem.write(path.join(dir, "index.js"), "export default {}")
+      },
+    })
+    const url = `file://${tmp.path}/index.js`
+    expect(Config.getPluginName(url)).toBe("@scope/pkg")
   })
 
   test("extracts name from npm package with version", () => {
@@ -1637,13 +1665,33 @@ describe("deduplicatePlugins", () => {
     expect(result.length).toBe(3)
   })
 
-  test("prefers local file over npm package with same name", () => {
-    const plugins = ["oh-my-opencode@2.4.3", "file:///project/.opencode/plugin/oh-my-opencode.js"]
+  test("file:// plugin with package.json dedupes with npm package of same name", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Filesystem.write(path.join(dir, "package.json"), JSON.stringify({ name: "oh-my-opencode" }))
+        await Filesystem.write(path.join(dir, "index.js"), "export default {}")
+      },
+    })
+    const plugins = ["oh-my-opencode@2.4.3", `file://${tmp.path}/index.js`]
 
     const result = Config.deduplicatePlugins(plugins)
 
     expect(result.length).toBe(1)
-    expect(result[0]).toBe("file:///project/.opencode/plugin/oh-my-opencode.js")
+    expect(result[0]).toBe(`file://${tmp.path}/index.js`)
+  })
+
+  test("file:// plugins without package.json do not collide on filename", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        await Filesystem.write(path.join(dir, "plugin-a", "index.js"), "export default {}")
+        await Filesystem.write(path.join(dir, "plugin-b", "index.js"), "export default {}")
+      },
+    })
+    const plugins = [`file://${tmp.path}/plugin-a/index.js`, `file://${tmp.path}/plugin-b/index.js`]
+
+    const result = Config.deduplicatePlugins(plugins)
+
+    expect(result.length).toBe(2)
   })
 
   test("preserves order of remaining plugins", () => {
@@ -1670,7 +1718,8 @@ describe("deduplicatePlugins", () => {
           }),
         )
 
-        await Filesystem.write(path.join(pluginDir, "my-plugin.js"), "export default {}")
+        await Filesystem.write(path.join(pluginDir, "package.json"), JSON.stringify({ name: "my-plugin" }))
+        await Filesystem.write(path.join(pluginDir, "index.js"), "export default {}")
       },
     })
 
