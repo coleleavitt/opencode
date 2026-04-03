@@ -38,6 +38,7 @@ import { PluginCommand } from "./cli/cmd/plug"
 import { runCleanup } from "./util/cleanup"
 import { Instance } from "./project/instance"
 import { setNonDumpable } from "./util/security"
+import { Heap } from "./cli/heap"
 
 setNonDumpable()
 
@@ -88,6 +89,8 @@ const cli = yargs(hideBin(process.argv))
         return "INFO"
       })(),
     })
+
+    Heap.start()
 
     process.env.AGENT = "1"
     process.env.OPENCODE = "1"
