@@ -103,7 +103,23 @@ export namespace LSPServer {
       const tsserver = Module.resolve("typescript/lib/tsserver.js", Instance.directory)
       log.info("typescript server", { tsserver })
       if (!tsserver) return
-      const proc = spawn(BunProc.which(), ["x", "typescript-language-server", "--stdio"], {
+      // #19953 memory-fix flags; keep bun x instead of Npm.which to avoid pre-install dep
+      const args = [
+        "x",
+        "typescript-language-server",
+        "--stdio",
+        "--tsserver-log-verbosity",
+        "off",
+        "--tsserver-path",
+        tsserver,
+      ]
+      if (
+        !(await pathExists(path.join(root, "tsconfig.json"))) &&
+        !(await pathExists(path.join(root, "jsconfig.json")))
+      ) {
+        args.push("--ignore-node-modules")
+      }
+      const proc = spawn(BunProc.which(), args, {
         cwd: root,
         env: {
           ...process.env,
