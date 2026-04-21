@@ -42,6 +42,21 @@ import { Heap } from "./cli/heap"
 
 setNonDumpable()
 
+// Bypass bun's default signal-exit path which has a UAF during opentui FFI
+// callback teardown, causing SIGSEGV at 0xF038EC (see issue #20695 thread).
+// We restore the terminal manually and exit fast before bun's cleanup runs.
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(sig, () => {
+    try {
+      if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(false)
+    } catch {}
+    try {
+      process.stdout.write("\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l")
+    } catch {}
+    process.exit(sig === "SIGINT" ? 130 : 143)
+  })
+}
+
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
     e: errorMessage(e),
