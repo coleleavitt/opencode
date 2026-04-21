@@ -74,7 +74,8 @@ export namespace SessionRevert {
         yield* snap.revert(patches)
         if (rev.snapshot) rev.diff = yield* snap.diff(rev.snapshot as string)
         const range = all.filter((msg) => msg.info.id >= rev!.messageID)
-        const diffs = yield* Effect.promise(() => SessionSummary.computeDiff({ messages: range }))
+        const rawDiffs = yield* Effect.promise(() => SessionSummary.computeDiff({ messages: range }))
+        const diffs = Snapshot.capFileDiffs(rawDiffs)
         yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore)
         yield* bus.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: diffs })
         yield* sessions.setRevert({

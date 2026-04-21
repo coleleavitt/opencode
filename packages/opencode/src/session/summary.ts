@@ -110,15 +110,16 @@ export namespace SessionSummary {
         const all = yield* sessions.messages({ sessionID: input.sessionID })
         if (!all.length) return
 
-        const diffs = yield* computeDiff({ messages: all })
+        const rawDiffs = yield* computeDiff({ messages: all })
         yield* sessions.setSummary({
           sessionID: input.sessionID,
           summary: {
-            additions: diffs.reduce((sum, x) => sum + x.additions, 0),
-            deletions: diffs.reduce((sum, x) => sum + x.deletions, 0),
-            files: diffs.length,
+            additions: rawDiffs.reduce((sum, x) => sum + x.additions, 0),
+            deletions: rawDiffs.reduce((sum, x) => sum + x.deletions, 0),
+            files: rawDiffs.length,
           },
         })
+        const diffs = Snapshot.capFileDiffs(rawDiffs)
         yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore)
         yield* bus.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: diffs })
 
@@ -133,16 +134,19 @@ export namespace SessionSummary {
       })
 
       const diff = Effect.fn("SessionSummary.diff")(function* (input: { sessionID: SessionID; messageID?: MessageID }) {
-        const diffs = yield* storage
+        const raw = yield* storage
           .read<Snapshot.FileDiff[]>(["session_diff", input.sessionID])
           .pipe(Effect.catch(() => Effect.succeed([] as Snapshot.FileDiff[])))
+        const diffs = Snapshot.capFileDiffs(raw)
         const next = diffs.map((item) => {
           const file = unquoteGitPath(item.file)
           if (file === item.file) return item
           return { ...item, file }
         })
-        const changed = next.some((item, i) => item.file !== diffs[i]?.file)
-        if (changed) yield* storage.write(["session_diff", input.sessionID], next).pipe(Effect.ignore)
+        const pathChanged = next.some((item, i) => item.file !== diffs[i]?.file)
+        const contentChanged = diffs.length !== raw.length || diffs.some((d, i) => d !== raw[i])
+        if (pathChanged || contentChanged)
+          yield* storage.write(["session_diff", input.sessionID], next).pipe(Effect.ignore)
         return next
       })
 

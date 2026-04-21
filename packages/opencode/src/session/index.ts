@@ -586,9 +586,10 @@ export namespace Session {
       })
 
       const diff = Effect.fn("Session.diff")(function* (sessionID: SessionID) {
-        return yield* Effect.tryPromise(() => Storage.read<Snapshot.FileDiff[]>(["session_diff", sessionID])).pipe(
+        const raw = yield* Effect.tryPromise(() => Storage.read<Snapshot.FileDiff[]>(["session_diff", sessionID])).pipe(
           Effect.orElseSucceed(() => [] as Snapshot.FileDiff[]),
         )
+        return Snapshot.capFileDiffs(raw)
       })
 
       const messages = Effect.fn("Session.messages")(function* (input: { sessionID: SessionID; limit?: number }) {

@@ -548,11 +548,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           setStore("tokensLive", sessionID, undefined)
 
           if (fullSyncedSessions.has(sessionID)) return
-          const [session, messages, todo, diff] = await Promise.all([
+          const [session, messages, todo] = await Promise.all([
             sdk.client.session.get({ sessionID }, { throwOnError: true }),
             sdk.client.session.messages({ sessionID, limit: 100 }),
             sdk.client.session.todo({ sessionID }),
-            sdk.client.session.diff({ sessionID }),
           ])
           setStore(
             produce((draft) => {
@@ -564,7 +563,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               for (const message of messages.data!) {
                 draft.part[message.info.id] = message.parts
               }
-              draft.session_diff[sessionID] = diff.data ?? []
             }),
           )
           fullSyncedSessions.add(sessionID)

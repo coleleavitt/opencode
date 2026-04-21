@@ -33,6 +33,17 @@ export namespace Snapshot {
     })
   export type FileDiff = z.infer<typeof FileDiff>
 
+  const FIELD_CAP = 256 * 1024
+
+  export function capFileDiffs(diffs: FileDiff[]): FileDiff[] {
+    return diffs.map((d) => {
+      const before = d.before.length > FIELD_CAP ? "" : d.before
+      const after = d.after.length > FIELD_CAP ? "" : d.after
+      if (before === d.before && after === d.after) return d
+      return { ...d, before, after }
+    })
+  }
+
   const log = Log.create({ service: "snapshot" })
   const prune = "7.days"
   const limit = 2 * 1024 * 1024
