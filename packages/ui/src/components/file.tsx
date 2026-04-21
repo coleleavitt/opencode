@@ -1,14 +1,13 @@
 import { sampledChecksum } from "@opencode-ai/util/encode"
 import {
   DEFAULT_VIRTUAL_FILE_METRICS,
-  type ExpansionDirections,
   type DiffLineAnnotation,
   type FileContents,
-  type FileDiffMetadata,
   File as PierreFile,
   type FileDiffOptions,
   FileDiff,
   type FileOptions,
+  getSingularPatch,
   type LineAnnotation,
   type SelectedLineRange,
   type VirtualFileMetrics,
@@ -22,7 +21,7 @@ import { ComponentProps, createEffect, createMemo, createSignal, onCleanup, onMo
 import { createDefaultOptions, styleVariables } from "../pierre"
 import { markCommentedDiffLines, markCommentedFileLines } from "../pierre/commented-lines"
 import { fixDiffSelection, findDiffSide, type DiffSelectionSide } from "../pierre/diff-selection"
-import { createFileFind, type FileFindReveal } from "../pierre/file-find"
+import { createFileFind } from "../pierre/file-find"
 import {
   applyViewerScheme,
   clearReadyWatcher,
@@ -65,21 +64,11 @@ type SharedProps<T> = {
   search?: FileSearchControl
 }
 
-export type FileSearchReveal = FileFindReveal
-
 export type FileSearchHandle = {
   focus: () => void
-  setQuery: (value: string) => void
-  clear: () => void
-  reveal: (hit: FileSearchReveal) => boolean
-  expand: (hit: FileSearchReveal) => boolean
-  refresh: () => void
 }
 
 export type FileSearchControl = {
-  shortcuts?: "global" | "disabled"
-  showBar?: boolean
-  disableVirtualization?: boolean
   register: (handle: FileSearchHandle | null) => void
 }
 
@@ -89,6 +78,7 @@ export type TextFileProps<T = {}> = FileOptions<T> &
     file: FileContents
     annotations?: LineAnnotation<T>[]
     preloadedDiff?: PreloadMultiFileDiffResult<T>
+    patch?: string
   }
 
 export type DiffFileProps<T = {}> = FileDiffOptions<T> &
@@ -98,6 +88,7 @@ export type DiffFileProps<T = {}> = FileDiffOptions<T> &
     after: FileContents
     annotations?: DiffLineAnnotation<T>[]
     preloadedDiff?: PreloadMultiFileDiffResult<T>
+    patch?: string
   }
 
 export type FileProps<T = {}> = TextFileProps<T> | DiffFileProps<T>
@@ -121,40 +112,6 @@ const sharedKeys = [
 const textKeys = ["file", ...sharedKeys] as const
 const diffKeys = ["before", "after", ...sharedKeys] as const
 
-function expansionForHit(diff: FileDiffMetadata, hit: FileSearchReveal) {
-  if (diff.isPartial || diff.hunks.length === 0) return
-
-  const side =
-    hit.side === "deletions"
-      ? {
-          start: (hunk: FileDiffMetadata["hunks"][number]) => hunk.deletionStart,
-          count: (hunk: FileDiffMetadata["hunks"][number]) => hunk.deletionCount,
-        }
-      : {
-          start: (hunk: FileDiffMetadata["hunks"][number]) => hunk.additionStart,
-          count: (hunk: FileDiffMetadata["hunks"][number]) => hunk.additionCount,
-        }
-
-  for (let i = 0; i < diff.hunks.length; i++) {
-    const hunk = diff.hunks[i]
-    const start = side.start(hunk)
-    if (hit.line < start) {
-      return {
-        index: i,
-        direction: i === 0 ? "down" : "both",
-      } satisfies { index: number; direction: ExpansionDirections }
-    }
-
-    const end = start + Math.max(side.count(hunk) - 1, -1)
-    if (hit.line <= end) return
-  }
-
-  return {
-    index: diff.hunks.length,
-    direction: "up",
-  } satisfies { index: number; direction: ExpansionDirections }
-}
-
 // ---------------------------------------------------------------------------
 // Shared viewer hook
 // ---------------------------------------------------------------------------
@@ -167,7 +124,6 @@ type MouseHit = {
 
 type ViewerConfig = {
   enableLineSelection: () => boolean
-  search: () => FileSearchControl | undefined
   selectedLines: () => SelectedLineRange | null | undefined
   commentedLines: () => SelectedLineRange[]
   onLineSelectionEnd: (range: SelectedLineRange | null) => void
@@ -207,7 +163,6 @@ function useFileViewer(config: ViewerConfig) {
     wrapper: () => wrapper,
     overlay: () => overlay,
     getRoot,
-    shortcuts: config.search()?.shortcuts,
   })
 
   // -- selection scheduling --
@@ -407,14 +362,10 @@ function useFileViewer(config: ViewerConfig) {
 
 type Viewer = ReturnType<typeof useFileViewer>
 
-type ModeAdapter = Omit<
-  ViewerConfig,
-  "enableLineSelection" | "search" | "selectedLines" | "commentedLines" | "onLineSelectionEnd"
->
+type ModeAdapter = Omit<ViewerConfig, "enableLineSelection" | "selectedLines" | "commentedLines" | "onLineSelectionEnd">
 
 type ModeConfig = {
   enableLineSelection: () => boolean
-  search: () => FileSearchControl | undefined
   selectedLines: () => SelectedLineRange | null | undefined
   commentedLines: () => SelectedLineRange[] | undefined
   onLineSelectionEnd: (range: SelectedLineRange | null) => void
@@ -437,7 +388,6 @@ type VirtualStrategy = {
 function useModeViewer(config: ModeConfig, adapter: ModeAdapter) {
   return useFileViewer({
     enableLineSelection: config.enableLineSelection,
-    search: config.search,
     selectedLines: config.selectedLines,
     commentedLines: () => config.commentedLines() ?? [],
     onLineSelectionEnd: config.onLineSelectionEnd,
@@ -448,32 +398,13 @@ function useModeViewer(config: ModeConfig, adapter: ModeAdapter) {
 function useSearchHandle(opts: {
   search: () => FileSearchControl | undefined
   find: ReturnType<typeof createFileFind>
-  expand?: (hit: FileSearchReveal) => boolean
 }) {
   createEffect(() => {
     const search = opts.search()
     if (!search) return
 
     const handle = {
-      focus: () => {
-        opts.find.focus()
-      },
-      setQuery: (value: string) => {
-        opts.find.activate()
-        opts.find.setQuery(value, { scroll: false })
-      },
-      clear: () => {
-        opts.find.clear()
-      },
-      reveal: (hit: FileSearchReveal) => {
-        opts.find.activate()
-        return opts.find.reveal(hit)
-      },
-      expand: (hit: FileSearchReveal) => opts.expand?.(hit) ?? false,
-      refresh: () => {
-        opts.find.activate()
-        opts.find.refresh()
-      },
+      focus: () => opts.find.focus(),
     } satisfies FileSearchHandle
 
     search.register(handle)
@@ -563,6 +494,29 @@ function renderViewer<I extends RenderTarget>(opts: {
   opts.onReady()
 }
 
+function preserve(viewer: Viewer) {
+  const root = scrollParent(viewer.wrapper)
+  if (!root) return () => {}
+
+  const high = viewer.container.getBoundingClientRect().height
+  if (!high) return () => {}
+
+  const top = viewer.wrapper.getBoundingClientRect().top - root.getBoundingClientRect().top
+  const prev = viewer.container.style.minHeight
+  viewer.container.style.minHeight = `${Math.ceil(high)}px`
+
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    viewer.container.style.minHeight = prev
+
+    const next = viewer.wrapper.getBoundingClientRect().top - root.getBoundingClientRect().top
+    const delta = next - top
+    if (delta) root.scrollTop += delta
+  }
+}
+
 function scrollParent(el: HTMLElement): HTMLElement | undefined {
   let parent = el.parentElement
   while (parent) {
@@ -606,7 +560,7 @@ function createLocalVirtualStrategy(host: () => HTMLDivElement | undefined, enab
   }
 }
 
-function createSharedVirtualStrategy(host: () => HTMLDivElement | undefined, enabled: () => boolean): VirtualStrategy {
+function createSharedVirtualStrategy(host: () => HTMLDivElement | undefined): VirtualStrategy {
   let shared: NonNullable<ReturnType<typeof acquireVirtualizer>> | undefined
 
   const release = () => {
@@ -616,10 +570,6 @@ function createSharedVirtualStrategy(host: () => HTMLDivElement | undefined, ena
 
   return {
     get: () => {
-      if (!enabled()) {
-        release()
-        return
-      }
       if (shared) return shared.virtualizer
 
       const container = host()
@@ -689,7 +639,6 @@ function diffSelectionSide(node: Node | null) {
 function ViewerShell(props: {
   mode: "text" | "diff"
   viewer: ReturnType<typeof useFileViewer>
-  search: FileSearchControl | undefined
   class: string | undefined
   classList: ComponentProps<"div">["classList"] | undefined
 }) {
@@ -708,7 +657,7 @@ function ViewerShell(props: {
       onPointerDown={props.viewer.find.onPointerDown}
       onFocus={props.viewer.find.onFocus}
     >
-      <Show when={(props.search?.showBar ?? true) && props.viewer.find.open()}>
+      <Show when={props.viewer.find.open()}>
         <FileSearchBar
           pos={props.viewer.find.pos}
           query={props.viewer.find.query}
@@ -855,7 +804,6 @@ function TextViewer<T>(props: TextFileProps<T>) {
   viewer = useModeViewer(
     {
       enableLineSelection: () => props.enableLineSelection === true,
-      search: () => local.search,
       selectedLines: () => local.selectedLines,
       commentedLines: () => local.commentedLines,
       onLineSelectionEnd: (range) => local.onLineSelectionEnd?.(range),
@@ -941,9 +889,7 @@ function TextViewer<T>(props: TextFileProps<T>) {
     virtuals.cleanup()
   })
 
-  return (
-    <ViewerShell mode="text" viewer={viewer} search={local.search} class={local.class} classList={local.classList} />
-  )
+  return <ViewerShell mode="text" viewer={viewer} class={local.class} classList={local.classList} />
 }
 
 // ---------------------------------------------------------------------------
@@ -1029,7 +975,6 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
   viewer = useModeViewer(
     {
       enableLineSelection: () => props.enableLineSelection === true,
-      search: () => local.search,
       selectedLines: () => local.selectedLines,
       commentedLines: () => local.commentedLines,
       onLineSelectionEnd: (range) => local.onLineSelectionEnd?.(range),
@@ -1037,10 +982,7 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
     adapter,
   )
 
-  const virtuals = createSharedVirtualStrategy(
-    () => viewer.container,
-    () => local.search?.disableVirtualization !== true,
-  )
+  const virtuals = createSharedVirtualStrategy(() => viewer.container)
 
   const large = createMemo(() => {
     const before = typeof local.before?.contents === "string" ? local.before.contents : ""
@@ -1074,12 +1016,13 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
     return { ...perf, disableLineNumbers: true }
   })
 
-  const notify = () => {
+  const notify = (done?: VoidFunction) => {
     notifyRendered({
       viewer,
       isReady: (root) => root.querySelector("[data-line]") != null,
       settleFrames: 1,
       onReady: () => {
+        done?.()
         setSelectedLines(viewer.lastSelection)
         viewer.find.refresh({ reset: true })
         local.onRendered?.()
@@ -1090,20 +1033,6 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
   useSearchHandle({
     search: () => local.search,
     find: viewer.find,
-    expand: (hit) => {
-      const active = instance as
-        | ((FileDiff<T> | VirtualizedFileDiff<T>) & {
-            fileDiff?: FileDiffMetadata
-          })
-        | undefined
-      if (!active?.fileDiff) return false
-
-      const next = expansionForHit(active.fileDiff, hit)
-      if (!next) return false
-
-      active.expandHunk(next.index, next.direction)
-      return true
-    },
   })
 
   // -- render instance --
@@ -1114,6 +1043,9 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
     const virtualizer = virtuals.get()
     const beforeContents = typeof local.before?.contents === "string" ? local.before.contents : ""
     const afterContents = typeof local.after?.contents === "string" ? local.after.contents : ""
+    const done = preserve(viewer)
+
+    onCleanup(done)
 
     const cacheKey = (contents: string) => {
       if (!large()) return sampledChecksum(contents, contents.length)
@@ -1131,6 +1063,19 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
         instance = value
       },
       draw: (value) => {
+        if (props.patch) {
+          try {
+            const diff = getSingularPatch(props.patch)
+            value.render({
+              fileDiff: diff,
+              lineAnnotations: [],
+              containerWrapper: viewer.container,
+            })
+            return
+          } catch (err) {
+            console.warn("patch parse failed, falling back to before/after", err)
+          }
+        }
         value.render({
           oldFile: { ...local.before, contents: beforeContents, cacheKey: cacheKey(beforeContents) },
           newFile: { ...local.after, contents: afterContents, cacheKey: cacheKey(afterContents) },
@@ -1138,7 +1083,7 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
           containerWrapper: viewer.container,
         })
       },
-      onReady: notify,
+      onReady: () => notify(done),
     })
   })
 
@@ -1158,9 +1103,7 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
     dragEndSide = undefined
   })
 
-  return (
-    <ViewerShell mode="diff" viewer={viewer} search={local.search} class={local.class} classList={local.classList} />
-  )
+  return <ViewerShell mode="diff" viewer={viewer} class={local.class} classList={local.classList} />
 }
 
 // ---------------------------------------------------------------------------

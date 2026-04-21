@@ -1,28 +1,19 @@
 import type { NamedError } from "@opencode-ai/util/error"
+import { Cause, Clock, Duration, Effect, Schedule } from "effect"
 import { MessageV2 } from "./message-v2"
 import { iife } from "@/util/iife"
+import * as ConnectionError from "@/util/connection-error"
 
 export namespace SessionRetry {
+  export type Err = ReturnType<NamedError["toObject"]>
+
   export const RETRY_INITIAL_DELAY = 2000
   export const RETRY_BACKOFF_FACTOR = 2
   export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
   export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
 
-  export async function sleep(ms: number, signal: AbortSignal): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const abortHandler = () => {
-        clearTimeout(timeout)
-        reject(new DOMException("Aborted", "AbortError"))
-      }
-      const timeout = setTimeout(
-        () => {
-          signal.removeEventListener("abort", abortHandler)
-          resolve()
-        },
-        Math.min(ms, RETRY_MAX_DELAY),
-      )
-      signal.addEventListener("abort", abortHandler, { once: true })
-    })
+  function cap(ms: number) {
+    return Math.min(ms, RETRY_MAX_DELAY)
   }
 
   export function delay(attempt: number, error?: MessageV2.APIError) {
@@ -33,7 +24,7 @@ export namespace SessionRetry {
         if (retryAfterMs) {
           const parsedMs = Number.parseFloat(retryAfterMs)
           if (!Number.isNaN(parsedMs)) {
-            return parsedMs
+            return cap(parsedMs)
           }
         }
 
@@ -42,24 +33,25 @@ export namespace SessionRetry {
           const parsedSeconds = Number.parseFloat(retryAfter)
           if (!Number.isNaN(parsedSeconds)) {
             // convert seconds to milliseconds
-            return Math.ceil(parsedSeconds * 1000)
+            return cap(Math.ceil(parsedSeconds * 1000))
           }
           // Try parsing as HTTP date format
           const parsed = Date.parse(retryAfter) - Date.now()
           if (!Number.isNaN(parsed) && parsed > 0) {
-            return Math.ceil(parsed)
+            return cap(Math.ceil(parsed))
           }
         }
 
-        return RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1)
+        const base = RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1)
+        return cap(base + Math.random() * 0.25 * base)
       }
     }
 
-    return Math.min(RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1), RETRY_MAX_DELAY_NO_HEADERS)
+    const base = Math.min(RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1), RETRY_MAX_DELAY_NO_HEADERS)
+    return cap(base + Math.random() * 0.25 * base)
   }
 
-  export function retryable(error: ReturnType<NamedError["toObject"]>) {
-    // context overflow errors should not be retried
+  export function retryable(error: Err) {
     if (MessageV2.ContextOverflowError.isInstance(error)) return undefined
     if (MessageV2.APIError.isInstance(error)) {
       if (!error.data.isRetryable) return undefined
@@ -67,6 +59,9 @@ export namespace SessionRetry {
         return `Free usage exceeded, add credits https://opencode.ai/zen`
       return error.data.message.includes("Overloaded") ? "Provider is overloaded" : error.data.message
     }
+
+    const conn = ConnectionError.extract(error.data)
+    if (conn?.stale) return `Connection reset (${conn.code})`
 
     const json = iife(() => {
       try {
@@ -80,22 +75,37 @@ export namespace SessionRetry {
         return undefined
       }
     })
-    try {
-      if (!json || typeof json !== "object") return undefined
-      const code = typeof json.code === "string" ? json.code : ""
+    if (!json || typeof json !== "object") return undefined
+    const code = typeof json.code === "string" ? json.code : ""
 
-      if (json.type === "error" && json.error?.type === "too_many_requests") {
-        return "Too Many Requests"
-      }
-      if (code.includes("exhausted") || code.includes("unavailable")) {
-        return "Provider is overloaded"
-      }
-      if (json.type === "error" && json.error?.code?.includes("rate_limit")) {
-        return "Rate Limited"
-      }
-      return JSON.stringify(json)
-    } catch {
-      return undefined
+    if (json.type === "error" && json.error?.type === "too_many_requests") {
+      return "Too Many Requests"
     }
+    if (code.includes("exhausted") || code.includes("unavailable")) {
+      return "Provider is overloaded"
+    }
+    if (json.type === "error" && typeof json.error?.code === "string" && json.error.code.includes("rate_limit")) {
+      return "Rate Limited"
+    }
+    return undefined
+  }
+
+  export function policy(opts: {
+    parse: (error: unknown) => Err
+    set: (input: { attempt: number; message: string; next: number }) => Effect.Effect<void>
+  }) {
+    return Schedule.fromStepWithMetadata(
+      Effect.succeed((meta: Schedule.InputMetadata<unknown>) => {
+        const error = opts.parse(meta.input)
+        const message = retryable(error)
+        if (!message) return Cause.done(meta.attempt)
+        return Effect.gen(function* () {
+          const wait = delay(meta.attempt, MessageV2.APIError.isInstance(error) ? error : undefined)
+          const now = yield* Clock.currentTimeMillis
+          yield* opts.set({ attempt: meta.attempt, message, next: now + wait })
+          return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]
+        })
+      }),
+    )
   }
 }

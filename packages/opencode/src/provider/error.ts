@@ -1,6 +1,8 @@
 import { APICallError } from "ai"
 import { STATUS_CODES } from "http"
 import { iife } from "@/util/iife"
+import type { ProviderID } from "./schema"
+import * as ConnectionError from "@/util/connection-error"
 
 export namespace ProviderError {
   // Adapted from overflow detection patterns in:
@@ -12,13 +14,19 @@ export namespace ProviderError {
     /input token count.*exceeds the maximum/i, // Google (Gemini)
     /maximum prompt length is \d+/i, // xAI (Grok)
     /reduce the length of the messages/i, // Groq
-    /maximum context length is \d+ tokens/i, // OpenRouter, DeepSeek
+    /maximum context length is \d+ tokens/i, // OpenRouter, DeepSeek, vLLM
     /exceeds the limit of \d+/i, // GitHub Copilot
     /exceeds the available context size/i, // llama.cpp server
     /greater than the context length/i, // LM Studio
     /context window exceeds limit/i, // MiniMax
     /exceeded model token limit/i, // Kimi For Coding, Moonshot
     /context[_ ]length[_ ]exceeded/i, // Generic fallback
+    /request entity too large/i, // HTTP 413
+    /context length is only \d+ tokens/i, // vLLM
+    /input length.*exceeds.*context length/i, // vLLM
+    /prompt too long; exceeded (?:max )?context length/i, // Ollama explicit overflow error
+    /too large for model with \d+ maximum context length/i, // Mistral
+    /model_context_window_exceeded/i, // z.ai non-standard finish_reason surfaced as error text
   ]
 
   function isOpenAiErrorRetryable(e: APICallError) {
@@ -39,16 +47,11 @@ export namespace ProviderError {
     return /^4(00|13)\s*(status code)?\s*\(no body\)/i.test(message)
   }
 
-  function error(providerID: string, error: APICallError) {
-    if (providerID.includes("github-copilot") && error.statusCode === 403) {
-      return "Please reauthenticate with the copilot provider to ensure your credentials work properly with OpenCode."
-    }
-
-    return error.message
-  }
-
-  function message(providerID: string, e: APICallError) {
+  function message(providerID: ProviderID, e: APICallError) {
     return iife(() => {
+      const conn = ConnectionError.extract(e)
+      if (conn) return ConnectionError.format(conn)
+
       const msg = e.message
       if (msg === "") {
         if (e.responseBody) return e.responseBody
@@ -59,10 +62,6 @@ export namespace ProviderError {
         return "Unknown error"
       }
 
-      const transformed = error(providerID, e)
-      if (transformed !== msg) {
-        return transformed
-      }
       if (!e.responseBody || (e.statusCode && msg !== STATUS_CODES[e.statusCode])) {
         return msg
       }
@@ -75,6 +74,18 @@ export namespace ProviderError {
           return `${msg}: ${errMsg}`
         }
       } catch {}
+
+      if (/^\s*<!doctype|^\s*<html/i.test(e.responseBody)) {
+        if (e.statusCode === 401) {
+          return "Unauthorized: request was blocked by a gateway or proxy. Your authentication token may be missing or expired — try running `opencode auth login <your provider URL>` to re-authenticate."
+        }
+        if (e.statusCode === 403) {
+          return "Forbidden: request was blocked by a gateway or proxy. You may not have permission to access this resource — check your account and provider settings."
+        }
+        const title = e.responseBody.match(/<title>([^<]+)<\/title>/i)?.[1]?.trim()
+        if (title) return title
+        return msg
+      }
 
       return `${msg}: ${e.responseBody}`
     }).trim()
@@ -163,9 +174,10 @@ export namespace ProviderError {
         metadata?: Record<string, string>
       }
 
-  export function parseAPICallError(input: { providerID: string; error: APICallError }): ParsedAPICallError {
+  export function parseAPICallError(input: { providerID: ProviderID; error: APICallError }): ParsedAPICallError {
     const m = message(input.providerID, input.error)
-    if (isOverflow(m)) {
+    const body = json(input.error.responseBody)
+    if (isOverflow(m) || input.error.statusCode === 413 || body?.error?.code === "context_length_exceeded") {
       return {
         type: "context_overflow",
         message: m,

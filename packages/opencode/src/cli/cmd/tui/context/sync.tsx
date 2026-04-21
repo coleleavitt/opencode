@@ -25,9 +25,27 @@ import { createSimpleContext } from "./helper"
 import type { Snapshot } from "@/snapshot"
 import { useExit } from "./exit"
 import { useArgs } from "./args"
-import { batch, onMount } from "solid-js"
+import { batch, onCleanup, onMount } from "solid-js"
 import { Log } from "@/util/log"
 import type { Path } from "@opencode-ai/sdk"
+import type { Workspace } from "@opencode-ai/sdk/v2"
+
+export type TokensLiveData = {
+  sessionID: string
+  messageID: string
+  modelID: string
+  providerID: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  cost: number
+  contextUsed: number
+  contextLimit: number
+  cacheHitPct: number | null
+  phase: "streaming" | "final"
+  timestamp: number
+}
 
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
@@ -73,6 +91,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       formatter: FormatterStatus[]
       vcs: VcsInfo | undefined
       path: Path
+      workspaceList: Workspace[]
+      tokensLive: Record<string, TokensLiveData | undefined>
     }>({
       provider_next: {
         all: [],
@@ -100,12 +120,47 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       formatter: [],
       vcs: undefined,
       path: { state: "", config: "", worktree: "", directory: "" },
+      workspaceList: [],
+      tokensLive: {},
     })
 
     const sdk = useSDK()
+    const tokensLiveTimeouts = new Map<string, ReturnType<typeof setTimeout>>()
+
+    async function syncWorkspaces() {
+      const result = await sdk.client.experimental.workspace.list().catch(() => undefined)
+      if (!result?.data) return
+      setStore("workspaceList", reconcile(result.data))
+    }
 
     sdk.event.listen((e) => {
       const event = e.details
+
+      // not yet in SDK's generated Event union — handle before typed switch
+      if ((event as any).type === "message.tokens.live") {
+        const payload = (event as any).properties as TokensLiveData
+        Log.Default.info("[sync] tokensLive update", {
+          phase: payload.phase,
+          sessionID: payload.sessionID,
+          out: payload.outputTokens,
+        })
+        setStore("tokensLive", payload.sessionID, payload)
+
+        const existing = tokensLiveTimeouts.get(payload.sessionID)
+        if (existing) clearTimeout(existing)
+
+        if (payload.phase === "final") {
+          tokensLiveTimeouts.set(
+            payload.sessionID,
+            setTimeout(() => {
+              tokensLiveTimeouts.delete(payload.sessionID)
+              setStore("tokensLive", payload.sessionID, undefined)
+            }, 500),
+          )
+        }
+        return
+      }
+
       switch (event.type) {
         case "server.instance.disposed":
           bootstrap()
@@ -194,7 +249,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           break
 
         case "session.deleted": {
-          const result = Binary.search(store.session, event.properties.info.id, (s) => s.id)
+          const deletedID = event.properties.info.id
+          const result = Binary.search(store.session, deletedID, (s) => s.id)
           if (result.found) {
             setStore(
               "session",
@@ -202,6 +258,24 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 draft.splice(result.index, 1)
               }),
             )
+          }
+          const pendingTimeout = tokensLiveTimeouts.get(deletedID)
+          if (pendingTimeout) {
+            clearTimeout(pendingTimeout)
+            tokensLiveTimeouts.delete(deletedID)
+          }
+          setStore("tokensLive", deletedID, undefined)
+          break
+        }
+        case "session.error": {
+          const errorSessionID = event.properties.sessionID
+          if (errorSessionID) {
+            const pendingTimeout = tokensLiveTimeouts.get(errorSessionID)
+            if (pendingTimeout) {
+              clearTimeout(pendingTimeout)
+              tokensLiveTimeouts.delete(errorSessionID)
+            }
+            setStore("tokensLive", errorSessionID, undefined)
           }
           break
         }
@@ -413,6 +487,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             sdk.client.provider.auth().then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get().then((x) => setStore("vcs", reconcile(x.data))),
             sdk.client.path.get().then((x) => setStore("path", reconcile(x.data!))),
+            syncWorkspaces(),
           ]).then(() => {
             setStore("status", "complete")
           })
@@ -429,6 +504,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
     onMount(() => {
       bootstrap()
+    })
+
+    onCleanup(() => {
+      for (const timeout of tokensLiveTimeouts.values()) {
+        clearTimeout(timeout)
+      }
+      tokensLiveTimeouts.clear()
     })
 
     const fullSyncedSessions = new Set<string>()
@@ -458,12 +540,18 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           return last.time.completed ? "idle" : "working"
         },
         async sync(sessionID: string) {
+          const pending = tokensLiveTimeouts.get(sessionID)
+          if (pending) {
+            clearTimeout(pending)
+            tokensLiveTimeouts.delete(sessionID)
+          }
+          setStore("tokensLive", sessionID, undefined)
+
           if (fullSyncedSessions.has(sessionID)) return
-          const [session, messages, todo, diff] = await Promise.all([
+          const [session, messages, todo] = await Promise.all([
             sdk.client.session.get({ sessionID }, { throwOnError: true }),
             sdk.client.session.messages({ sessionID, limit: 100 }),
             sdk.client.session.todo({ sessionID }),
-            sdk.client.session.diff({ sessionID }),
           ])
           setStore(
             produce((draft) => {
@@ -475,11 +563,16 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               for (const message of messages.data!) {
                 draft.part[message.info.id] = message.parts
               }
-              draft.session_diff[sessionID] = diff.data ?? []
             }),
           )
           fullSyncedSessions.add(sessionID)
         },
+      },
+      workspace: {
+        get(workspaceID: string) {
+          return store.workspaceList.find((workspace) => workspace.id === workspaceID)
+        },
+        sync: syncWorkspaces,
       },
       bootstrap,
     }
