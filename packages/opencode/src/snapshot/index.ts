@@ -27,12 +27,16 @@ export namespace Snapshot {
       additions: z.number(),
       deletions: z.number(),
       status: z.enum(["added", "deleted", "modified"]).optional(),
+      patch: z.string().optional(),
     })
     .meta({
       ref: "FileDiff",
     })
   export type FileDiff = z.infer<typeof FileDiff>
 
+  // Defense-in-depth: patch mode (compact unified diff) is the primary rendering path for large diffs.
+  // When patch is present, before/after over this cap are blanked (patch carries rendering).
+  // When patch is absent (legacy data), before/after over this cap are blanked (renders as added/deleted).
   const FIELD_CAP = 256 * 1024
 
   export function capFileDiffs(diffs: FileDiff[]): FileDiff[] {

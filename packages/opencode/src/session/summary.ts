@@ -1,3 +1,4 @@
+import { createTwoFilesPatch } from "diff"
 import z from "zod"
 import { Effect, Layer, ServiceMap } from "effect"
 import { makeRuntime } from "@/effect/run-service"
@@ -99,8 +100,16 @@ export namespace SessionSummary {
             if (part.type === "step-finish" && part.snapshot) to = part.snapshot
           }
         }
-        if (from && to) return yield* snapshot.diffFull(from, to)
-        return []
+        if (!from || !to) return []
+        const diffs = yield* snapshot.diffFull(from, to)
+        return diffs.map((d) => {
+          if (!d.before && !d.after) return d
+          try {
+            return { ...d, patch: createTwoFilesPatch(d.file, d.file, d.before, d.after) }
+          } catch {
+            return d
+          }
+        })
       })
 
       const summarize = Effect.fn("SessionSummary.summarize")(function* (input: {
