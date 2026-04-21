@@ -15,6 +15,7 @@ import { errorMessage } from "@/util/error"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
 import { ModelID, ProviderID } from "@/provider/schema"
+import { Blob } from "../storage/blob"
 
 /** Error shape thrown by Bun's fetch() when gzip/br decompression fails mid-stream */
 interface FetchDecompressionError extends Error {
@@ -183,11 +184,18 @@ export namespace MessageV2 {
     mime: z.string(),
     filename: z.string().optional(),
     url: z.string(),
+    blob: z.string().optional(),
     source: FilePartSource.optional(),
   }).meta({
     ref: "FilePart",
   })
   export type FilePart = z.infer<typeof FilePart>
+
+  export async function resolveFilePartURL(part: { url: string; blob?: string }): Promise<string> {
+    if (!part.blob) return part.url
+    const resolved = await Blob.resolve(part.blob)
+    return resolved ?? part.url
+  }
 
   export const AgentPart = PartBase.extend({
     type: z.literal("agent"),
@@ -686,7 +694,7 @@ export namespace MessageV2 {
             } else {
               userMessage.parts.push({
                 type: "file",
-                url: part.url,
+                url: await resolveFilePartURL(part),
                 mediaType: part.mime,
                 filename: part.filename,
               })
@@ -741,7 +749,15 @@ export namespace MessageV2 {
             toolNames.add(part.tool)
             if (part.state.status === "completed") {
               const outputText = part.state.time.compacted ? "[Old tool result content cleared]" : part.state.output
-              const attachments = part.state.time.compacted || options?.stripMedia ? [] : (part.state.attachments ?? [])
+              const attachments =
+                part.state.time.compacted || options?.stripMedia
+                  ? []
+                  : await Promise.all(
+                      (part.state.attachments ?? []).map(async (a) => ({
+                        ...a,
+                        url: await resolveFilePartURL(a),
+                      })),
+                    )
 
               // For providers that don't support media in tool results, extract media files
               // (images, PDFs) to be sent as a separate user message

@@ -24,6 +24,7 @@ import { SessionPrompt } from "./prompt"
 import { fn } from "@/util/fn"
 import { Command } from "../command"
 import { Snapshot } from "@/snapshot"
+import { Blob } from "../storage/blob"
 import { ProjectID } from "../project/schema"
 import { WorkspaceID } from "../control-plane/schema"
 import { SessionID, MessageID, PartID } from "./schema"
@@ -481,6 +482,18 @@ export namespace Session {
 
       const updatePart = <T extends MessageV2.Part>(part: T): Effect.Effect<T> =>
         Effect.gen(function* () {
+          if (part.type === "file" && Blob.shouldExternalize(part.url)) {
+            const result = yield* Effect.promise(() => Blob.externalize(part.url))
+            part.blob = result.blob
+          }
+          if (part.type === "tool" && part.state.status === "completed" && part.state.attachments) {
+            for (const att of part.state.attachments) {
+              if (Blob.shouldExternalize(att.url)) {
+                const result = yield* Effect.promise(() => Blob.externalize(att.url))
+                att.blob = result.blob
+              }
+            }
+          }
           yield* Effect.sync(() =>
             SyncEvent.run(MessageV2.Event.PartUpdated, {
               sessionID: part.sessionID,

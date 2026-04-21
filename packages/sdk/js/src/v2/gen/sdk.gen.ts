@@ -2185,6 +2185,7 @@ export class Session2 extends HeyApiClient {
         mime: string
         filename?: string
         url: string
+        blob?: string
         source?: FilePartSource
       }>
     },
