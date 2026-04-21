@@ -13,7 +13,7 @@ import type {
 } from "@opencode-ai/sdk/v2/client"
 import type { State, VcsCache } from "./types"
 import { trimSessions } from "./session-trim"
-import { dropSessionCaches } from "./session-cache"
+import { dropSessionCaches, warnOversizedSessionDiff } from "./session-cache"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 
@@ -162,6 +162,7 @@ export function applyDirectoryEvent(input: {
     }
     case "session.diff": {
       const props = event.properties as { sessionID: string; diff: FileDiff[] }
+      warnOversizedSessionDiff(props.sessionID, props.diff)
       input.setStore("session_diff", props.sessionID, reconcile(props.diff, { key: "file" }))
       break
     }

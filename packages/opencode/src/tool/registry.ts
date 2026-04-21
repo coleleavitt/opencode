@@ -38,6 +38,9 @@ export namespace ToolRegistry {
 
   type State = {
     custom: Tool.Info[]
+    // avoids per-LLM-call closure reallocation; bounded by |tools|*|agents|, cleared via InstanceState
+    init: Map<string, Map<string, Tool.Def>>
+    stats: { hit: number; miss: number }
   }
 
   export interface Interface {
@@ -107,7 +110,7 @@ export namespace ToolRegistry {
             }
           }
 
-          return { custom }
+          return { custom, init: new Map<string, Map<string, Tool.Def>>(), stats: { hit: 0, miss: 0 } }
         }),
       )
 
@@ -143,9 +146,10 @@ export namespace ToolRegistry {
         const idx = state.custom.findIndex((t) => t.id === tool.id)
         if (idx >= 0) {
           state.custom.splice(idx, 1, tool)
-          return
+        } else {
+          state.custom.push(tool)
         }
-        state.custom.push(tool)
+        for (const bucket of state.init.values()) bucket.delete(tool.id)
       })
 
       const ids = Effect.fn("ToolRegistry.ids")(function* () {
@@ -172,11 +176,24 @@ export namespace ToolRegistry {
 
           return true
         })
-        return yield* Effect.forEach(
+        const agentKey = agent?.name ?? "__default__"
+        let bucket = state.init.get(agentKey)
+        if (!bucket) {
+          bucket = new Map()
+          state.init.set(agentKey, bucket)
+        }
+        const result = yield* Effect.forEach(
           filtered,
           Effect.fnUntraced(function* (tool: Tool.Info) {
             using _ = log.time(tool.id)
-            const next = yield* Effect.promise(() => tool.init({ agent }))
+            let next = bucket!.get(tool.id)
+            if (!next) {
+              state.stats.miss++
+              next = yield* Effect.promise(() => tool.init({ agent }))
+              bucket!.set(tool.id, next)
+            } else {
+              state.stats.hit++
+            }
             const output = {
               description: next.description,
               parameters: next.parameters,
@@ -192,6 +209,15 @@ export namespace ToolRegistry {
           }),
           { concurrency: "unbounded" },
         )
+        if ((state.stats.hit + state.stats.miss) % 100 === 0) {
+          log.info("init-cache", {
+            agents: state.init.size,
+            cached: Array.from(state.init.values()).reduce((s, m) => s + m.size, 0),
+            hit: state.stats.hit,
+            miss: state.stats.miss,
+          })
+        }
+        return result
       })
 
       return Service.of({ register, ids, tools })

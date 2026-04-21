@@ -9,6 +9,8 @@ import type {
 } from "@opencode-ai/sdk/v2/client"
 
 export const SESSION_CACHE_LIMIT = 40
+const DIFF_COUNT_WARN = 500
+const DIFF_BYTES_WARN = 64 * 1024 * 1024
 
 type SessionCache = {
   session_status: Record<string, SessionStatus | undefined>
@@ -20,10 +22,30 @@ type SessionCache = {
   question: Record<string, QuestionRequest[] | undefined>
 }
 
+export function sessionDiffStats(diffs: FileDiff[] | undefined) {
+  if (!diffs?.length) return { count: 0, bytes: 0 }
+  let bytes = 0
+  for (const d of diffs) bytes += (d.before?.length ?? 0) + (d.after?.length ?? 0) + (d.patch?.length ?? 0)
+  return { count: diffs.length, bytes }
+}
+
+export function warnOversizedSessionDiff(sessionID: string, diffs: FileDiff[] | undefined) {
+  const s = sessionDiffStats(diffs)
+  if (s.count >= DIFF_COUNT_WARN || s.bytes >= DIFF_BYTES_WARN) {
+    console.warn("[session-cache] oversized diff", {
+      sessionID,
+      count: s.count,
+      bytes: s.bytes,
+      mb: +(s.bytes / 1048576).toFixed(2),
+    })
+  }
+}
+
 export function dropSessionCaches(store: SessionCache, sessionIDs: Iterable<string>) {
   const stale = new Set(Array.from(sessionIDs).filter(Boolean))
   if (stale.size === 0) return
 
+  let droppedDiffMB = 0
   for (const key of Object.keys(store.part)) {
     const parts = store.part[key]
     if (!parts?.some((part) => stale.has(part?.sessionID ?? ""))) continue
@@ -31,12 +53,19 @@ export function dropSessionCaches(store: SessionCache, sessionIDs: Iterable<stri
   }
 
   for (const sessionID of stale) {
+    droppedDiffMB += sessionDiffStats(store.session_diff[sessionID]).bytes / 1048576
     delete store.message[sessionID]
     delete store.todo[sessionID]
     delete store.session_diff[sessionID]
     delete store.session_status[sessionID]
     delete store.permission[sessionID]
     delete store.question[sessionID]
+  }
+  if (droppedDiffMB >= 16) {
+    console.info("[session-cache] evicted", {
+      sessions: stale.size,
+      freedMB: +droppedDiffMB.toFixed(2),
+    })
   }
 }
 

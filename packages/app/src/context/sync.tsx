@@ -12,7 +12,12 @@ import {
 import { useGlobalSync } from "./global-sync"
 import { useSDK } from "./sdk"
 import type { Message, Part } from "@opencode-ai/sdk/v2/client"
-import { SESSION_CACHE_LIMIT, dropSessionCaches, pickSessionCacheEvictions } from "./global-sync/session-cache"
+import {
+  SESSION_CACHE_LIMIT,
+  dropSessionCaches,
+  pickSessionCacheEvictions,
+  warnOversizedSessionDiff,
+} from "./global-sync/session-cache"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 
@@ -510,7 +515,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           return runInflight(inflightDiff, key, () =>
             retry(() => client.session.diff({ sessionID })).then((diff) => {
               if (!tracked(directory, sessionID)) return
-              setStore("session_diff", sessionID, reconcile(diff.data ?? [], { key: "file" }))
+              const data = diff.data ?? []
+              warnOversizedSessionDiff(sessionID, data)
+              setStore("session_diff", sessionID, reconcile(data, { key: "file" }))
             }),
           )
         },

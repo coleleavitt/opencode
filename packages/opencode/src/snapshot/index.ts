@@ -38,14 +38,35 @@ export namespace Snapshot {
   // When patch is present, before/after over this cap are blanked (patch carries rendering).
   // When patch is absent (legacy data), before/after over this cap are blanked (renders as added/deleted).
   const FIELD_CAP = 256 * 1024
+  const SESSION_DIFF_WARN_BYTES = 64 * 1024 * 1024
+  const SESSION_DIFF_WARN_COUNT = 500
 
   export function capFileDiffs(diffs: FileDiff[]): FileDiff[] {
-    return diffs.map((d) => {
-      const before = d.before.length > FIELD_CAP ? "" : d.before
-      const after = d.after.length > FIELD_CAP ? "" : d.after
-      if (before === d.before && after === d.after) return d
-      return { ...d, before, after }
+    let capped = 0
+    let savedBytes = 0
+    let totalBytes = 0
+    const out = diffs.map((d) => {
+      const beforeLen = d.before.length
+      const afterLen = d.after.length
+      const over = beforeLen > FIELD_CAP || afterLen > FIELD_CAP
+      const before = beforeLen > FIELD_CAP ? "" : d.before
+      const after = afterLen > FIELD_CAP ? "" : d.after
+      if (over) {
+        capped++
+        savedBytes += (beforeLen > FIELD_CAP ? beforeLen : 0) + (afterLen > FIELD_CAP ? afterLen : 0)
+      }
+      totalBytes += before.length + after.length + (d.patch?.length ?? 0)
+      return over ? { ...d, before, after } : d
     })
+    if (diffs.length >= SESSION_DIFF_WARN_COUNT || totalBytes >= SESSION_DIFF_WARN_BYTES || capped > 0) {
+      log.warn("capFileDiffs", {
+        diffs: diffs.length,
+        capped,
+        savedMB: +(savedBytes / 1048576).toFixed(2),
+        retainedMB: +(totalBytes / 1048576).toFixed(2),
+      })
+    }
+    return out
   }
 
   const log = Log.create({ service: "snapshot" })
