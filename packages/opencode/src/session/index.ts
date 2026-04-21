@@ -61,7 +61,6 @@ export namespace Session {
             additions: row.summary_additions ?? 0,
             deletions: row.summary_deletions ?? 0,
             files: row.summary_files ?? 0,
-            diffs: row.summary_diffs ?? undefined,
           }
         : undefined
     const share = row.share_url ? { url: row.share_url } : undefined
@@ -102,7 +101,7 @@ export namespace Session {
       summary_additions: info.summary?.additions,
       summary_deletions: info.summary?.deletions,
       summary_files: info.summary?.files,
-      summary_diffs: info.summary?.diffs,
+      summary_diffs: null,
       revert: info.revert ?? null,
       permission: info.permission,
       time_created: info.time.created,
