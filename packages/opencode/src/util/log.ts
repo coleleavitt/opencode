@@ -65,7 +65,15 @@ export namespace Log {
       Global.Path.log,
       options.dev ? "dev.log" : new Date().toISOString().split(".")[0].replace(/:/g, "") + ".log",
     )
-    await fs.truncate(logpath).catch(() => {})
+    if (options.dev) {
+      const prev = await fs.stat(logpath).catch(() => null)
+      if (prev && prev.size > 0) {
+        const rotated = logpath + "." + new Date().toISOString().split(".")[0].replace(/:/g, "")
+        await fs.rename(logpath, rotated).catch(() => {})
+      }
+    } else {
+      await fs.truncate(logpath).catch(() => {})
+    }
     const stream = createWriteStream(logpath, { flags: "a" })
     write = async (msg: any) => {
       return new Promise((resolve, reject) => {
@@ -78,15 +86,22 @@ export namespace Log {
   }
 
   async function cleanup(dir: string) {
-    const files = await Glob.scan("????-??-??T??????.log", {
+    const stamped = await Glob.scan("????-??-??T??????.log", {
       cwd: dir,
       absolute: true,
       include: "file",
     })
-    if (files.length <= 5) return
-
-    const filesToDelete = files.slice(0, -10)
-    await Promise.all(filesToDelete.map((file) => fs.unlink(file).catch(() => {})))
+    const rotated = await Glob.scan("dev.log.????-??-??T??????", {
+      cwd: dir,
+      absolute: true,
+      include: "file",
+    })
+    const trim = async (files: string[]) => {
+      if (files.length <= 5) return
+      const filesToDelete = files.slice(0, -10)
+      await Promise.all(filesToDelete.map((file) => fs.unlink(file).catch(() => {})))
+    }
+    await Promise.all([trim(stamped), trim(rotated)])
   }
 
   function formatError(error: Error, depth = 0): string {
