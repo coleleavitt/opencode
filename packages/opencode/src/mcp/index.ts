@@ -117,6 +117,7 @@ export namespace MCP {
   // Store transports for OAuth servers to allow finishing auth
   type TransportWithAuth = StreamableHTTPClientTransport | SSEClientTransport
   const pendingOAuthTransports = new Map<string, TransportWithAuth>()
+  const oauthTimers = new Map<string, Timer>()
 
   // Prompt cache types
   type PromptInfo = Awaited<ReturnType<MCPClient["listPrompts"]>>["prompts"][number]
@@ -341,6 +342,14 @@ export namespace MCP {
                     .pipe(Effect.ignore, Effect.as(undefined))
                 } else {
                   pendingOAuthTransports.set(key, transport)
+                  clearTimeout(oauthTimers.get(key))
+                  oauthTimers.set(
+                    key,
+                    setTimeout(() => {
+                      pendingOAuthTransports.delete(key)
+                      oauthTimers.delete(key)
+                    }, 5 * 60_000).unref(),
+                  )
                   lastStatus = { status: "needs_auth" as const }
                   return bus
                     .publish(TuiEvent.ToastShow, {
@@ -542,6 +551,8 @@ export namespace MCP {
                 { concurrency: "unbounded" },
               )
               pendingOAuthTransports.clear()
+              for (const t of oauthTimers.values()) clearTimeout(t)
+              oauthTimers.clear()
             }),
           )
 
@@ -759,6 +770,14 @@ export namespace MCP {
           Effect.catch((error) => {
             if (error instanceof UnauthorizedError && capturedUrl) {
               pendingOAuthTransports.set(mcpName, transport)
+              clearTimeout(oauthTimers.get(mcpName))
+              oauthTimers.set(
+                mcpName,
+                setTimeout(() => {
+                  pendingOAuthTransports.delete(mcpName)
+                  oauthTimers.delete(mcpName)
+                }, 5 * 60_000).unref(),
+              )
               return Effect.succeed({ authorizationUrl: capturedUrl.toString(), oauthState })
             }
             return Effect.die(error)
@@ -825,6 +844,8 @@ export namespace MCP {
 
         yield* auth.clearCodeVerifier(mcpName)
         pendingOAuthTransports.delete(mcpName)
+        clearTimeout(oauthTimers.get(mcpName))
+        oauthTimers.delete(mcpName)
 
         const mcpConfig = yield* getMcpConfig(mcpName)
         if (!mcpConfig) return { status: "failed", error: "MCP config not found after auth" } as Status
@@ -836,6 +857,8 @@ export namespace MCP {
         yield* auth.remove(mcpName)
         McpOAuthCallback.cancelPending(mcpName)
         pendingOAuthTransports.delete(mcpName)
+        clearTimeout(oauthTimers.get(mcpName))
+        oauthTimers.delete(mcpName)
         log.info("removed oauth credentials", { mcpName })
       })
 

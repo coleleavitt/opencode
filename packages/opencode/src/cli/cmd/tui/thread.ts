@@ -11,7 +11,6 @@ import { withTimeout } from "@/util/timeout"
 import { withNetworkOptions, resolveNetworkOptions } from "@/cli/network"
 import { Filesystem } from "@/util/filesystem"
 import type { Event } from "@opencode-ai/sdk/v2"
-import type { EventSource } from "./context/sdk"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
 import { TuiConfig } from "@/config/tui"
 import { Instance } from "@/project/instance"
@@ -41,11 +40,23 @@ function createWorkerFetch(client: RpcClient): typeof fetch {
   return fn as typeof fetch
 }
 
-function createEventSource(client: RpcClient): EventSource {
+function createEventSource(client: RpcClient) {
+  const unsubs = new Set<() => void>()
   return {
-    on: (handler) => client.on<Event>("event", handler),
-    setWorkspace: (workspaceID) => {
+    on: (handler: (event: Event) => void) => {
+      const unsub = client.on<Event>("event", handler)
+      unsubs.add(unsub)
+      return () => {
+        unsubs.delete(unsub)
+        unsub()
+      }
+    },
+    setWorkspace: (workspaceID?: string) => {
       void client.call("setWorkspace", { workspaceID })
+    },
+    cleanup: () => {
+      for (const unsub of unsubs) unsub()
+      unsubs.clear()
     },
   }
 }
@@ -155,10 +166,12 @@ export const TuiThreadCommand = cmd({
         process.on("unhandledRejection", error)
         process.on("SIGUSR2", reload)
 
+        const events = createEventSource(client)
         let stopped = false
         const stop = async () => {
           if (stopped) return
           stopped = true
+          events.cleanup()
           process.off("uncaughtException", error)
           process.off("unhandledRejection", error)
           process.off("SIGUSR2", reload)
@@ -194,7 +207,7 @@ export const TuiThreadCommand = cmd({
           : {
               url: "http://opencode.internal",
               fetch: createWorkerFetch(client),
-              events: createEventSource(client),
+              events,
             }
 
         setTimeout(() => {

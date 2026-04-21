@@ -45,15 +45,18 @@ setNonDumpable()
 // Bypass bun's default signal-exit path which has a UAF during opentui FFI
 // callback teardown, causing SIGSEGV at 0xF038EC (see issue #20695 thread).
 // We restore the terminal manually and exit fast before bun's cleanup runs.
+// If process.exit() stalls in bun's FFI cleanup, _exit() fires after 100ms.
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   process.on(sig, () => {
+    const code = sig === "SIGINT" ? 130 : 143
     try {
       if (process.stdin.isTTY && process.stdin.setRawMode) process.stdin.setRawMode(false)
     } catch {}
     try {
       process.stdout.write("\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l")
     } catch {}
-    process.exit(sig === "SIGINT" ? 130 : 143)
+    setTimeout(() => (process as any)._exit(code), 100).unref()
+    process.exit(code)
   })
 }
 
@@ -236,12 +239,13 @@ try {
   // 1. Run global cleanup registry (2s timeout)
   // 2. Dispose all instances (2s timeout)
   // 3. Failsafe: force exit after 5s total
-  const failsafe = setTimeout(() => process.exit(process.exitCode ?? 0), 5000)
+  const failsafe = setTimeout(() => (process as any)._exit(process.exitCode ?? 0), 5000)
   failsafe.unref?.()
   try {
     await runCleanup(2000)
     await Promise.race([Instance.disposeAll(), new Promise((r) => setTimeout(r, 2000))])
   } catch {}
   clearTimeout(failsafe)
+  setTimeout(() => (process as any)._exit(process.exitCode ?? 0), 100).unref()
   process.exit()
 }
