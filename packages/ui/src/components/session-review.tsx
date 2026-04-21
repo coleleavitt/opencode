@@ -510,6 +510,7 @@ export const SessionReview = (props: SessionReviewProps) => {
                                     renderHoverUtility={props.onLineComment ? commentsUi.renderHoverUtility : undefined}
                                     selectedLines={selectedLines()}
                                     commentedLines={commentedLines()}
+                                    patch={item().patch}
                                     before={{
                                       name: file,
                                       contents: typeof item().before === "string" ? item().before : "",

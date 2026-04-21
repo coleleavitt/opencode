@@ -7,6 +7,7 @@ import {
   type FileDiffOptions,
   FileDiff,
   type FileOptions,
+  getSingularPatch,
   type LineAnnotation,
   type SelectedLineRange,
   type VirtualFileMetrics,
@@ -77,6 +78,7 @@ export type TextFileProps<T = {}> = FileOptions<T> &
     file: FileContents
     annotations?: LineAnnotation<T>[]
     preloadedDiff?: PreloadMultiFileDiffResult<T>
+    patch?: string
   }
 
 export type DiffFileProps<T = {}> = FileDiffOptions<T> &
@@ -86,6 +88,7 @@ export type DiffFileProps<T = {}> = FileDiffOptions<T> &
     after: FileContents
     annotations?: DiffLineAnnotation<T>[]
     preloadedDiff?: PreloadMultiFileDiffResult<T>
+    patch?: string
   }
 
 export type FileProps<T = {}> = TextFileProps<T> | DiffFileProps<T>
@@ -1060,6 +1063,19 @@ function DiffViewer<T>(props: DiffFileProps<T>) {
         instance = value
       },
       draw: (value) => {
+        if (props.patch) {
+          try {
+            const diff = getSingularPatch(props.patch)
+            value.render({
+              fileDiff: diff,
+              lineAnnotations: [],
+              containerWrapper: viewer.container,
+            })
+            return
+          } catch (err) {
+            console.warn("patch parse failed, falling back to before/after", err)
+          }
+        }
         value.render({
           oldFile: { ...local.before, contents: beforeContents, cacheKey: cacheKey(beforeContents) },
           newFile: { ...local.after, contents: afterContents, cacheKey: cacheKey(afterContents) },

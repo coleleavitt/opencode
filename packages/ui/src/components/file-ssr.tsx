@@ -1,4 +1,4 @@
-import { DIFFS_TAG_NAME, FileDiff, VirtualizedFileDiff } from "@pierre/diffs"
+import { DIFFS_TAG_NAME, FileDiff, getSingularPatch, VirtualizedFileDiff } from "@pierre/diffs"
 import { type PreloadMultiFileDiffResult } from "@pierre/diffs/ssr"
 import { createEffect, onCleanup, onMount, Show, splitProps } from "solid-js"
 import { Dynamic, isServer } from "solid-js/web"
@@ -18,6 +18,7 @@ import { File, type DiffFileProps, type FileProps } from "./file"
 
 type SSRDiffFileProps<T> = DiffFileProps<T> & {
   preloadedDiff: PreloadMultiFileDiffResult<T>
+  patch?: string
 }
 
 function DiffSSRViewer<T>(props: SSRDiffFileProps<T>) {
@@ -114,13 +115,34 @@ function DiffSSRViewer<T>(props: SSRDiffFileProps<T>) {
 
     // @ts-expect-error private field required for hydration
     fileDiffInstance.fileContainer = fileDiffRef
-    fileDiffInstance.hydrate({
-      oldFile: local.before,
-      newFile: local.after,
-      lineAnnotations: local.annotations ?? [],
-      fileContainer: fileDiffRef,
-      containerWrapper: container,
-    })
+    if (props.patch) {
+      try {
+        const diff = getSingularPatch(props.patch)
+        fileDiffInstance.hydrate({
+          fileDiff: diff,
+          lineAnnotations: local.annotations ?? [],
+          fileContainer: fileDiffRef,
+          containerWrapper: container,
+        })
+      } catch (err) {
+        console.warn("patch parse failed, falling back to before/after", err)
+        fileDiffInstance.hydrate({
+          oldFile: local.before,
+          newFile: local.after,
+          lineAnnotations: local.annotations ?? [],
+          fileContainer: fileDiffRef,
+          containerWrapper: container,
+        })
+      }
+    } else {
+      fileDiffInstance.hydrate({
+        oldFile: local.before,
+        newFile: local.after,
+        lineAnnotations: local.annotations ?? [],
+        fileContainer: fileDiffRef,
+        containerWrapper: container,
+      })
+    }
 
     notifyRendered()
   })

@@ -94,6 +94,26 @@ export type EventMessagePartDelta = {
   }
 }
 
+export type EventMessageTokensLive = {
+  type: "message.tokens.live"
+  properties: {
+    sessionID: string
+    messageID: string
+    modelID: string
+    providerID: string
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+    cost: number
+    contextUsed: number
+    contextLimit: number
+    cacheHitPct: number | null
+    phase: "streaming" | "final"
+    timestamp: number
+  }
+}
+
 export type PermissionRequest = {
   id: string
   sessionID: string
@@ -354,6 +374,7 @@ export type FileDiff = {
   additions: number
   deletions: number
   status?: "added" | "deleted" | "modified"
+  patch?: string
 }
 
 export type EventSessionDiff = {
@@ -973,6 +994,7 @@ export type Event =
   | EventLspClientDiagnostics
   | EventLspUpdated
   | EventMessagePartDelta
+  | EventMessageTokensLive
   | EventPermissionAsked
   | EventPermissionReplied
   | EventSessionStatus
