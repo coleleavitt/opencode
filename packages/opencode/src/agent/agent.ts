@@ -279,7 +279,9 @@ export namespace Agent {
           }
 
           const get = Effect.fnUntraced(function* (agent: string) {
-            return agents[agent]
+            return (
+              agents[agent] ?? agents[Object.keys(agents).find((k) => k.toLowerCase() === agent.toLowerCase()) ?? ""]
+            )
           })
 
           const list = Effect.fnUntraced(function* () {
