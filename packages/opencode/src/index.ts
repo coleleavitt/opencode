@@ -42,10 +42,16 @@ import { Heap } from "./cli/heap"
 
 setNonDumpable()
 
-// Bypass bun's default signal-exit path which has a UAF during opentui FFI
-// callback teardown, causing SIGSEGV at 0xF038EC (see issue #20695 thread).
-// We restore the terminal manually and exit fast before bun's cleanup runs.
-// If process.exit() stalls in bun's FFI cleanup, _exit() fires after 100ms.
+// Skip bun's signal-exit path entirely. Two exit-time UAFs converge here:
+//  - bun #28113 (fixed by PR #28115): threadsafe JSCallback race vs GC.
+//  - bun #28874 (unmerged): process.exit() from a JS callback leaves the
+//    VM teardown path partially executed; dispatch tables retain stale
+//    function pointers; a trailing microtask jumps into freed code,
+//    surfacing as SIGSEGV at a text-segment address on Ctrl+C.
+// Restore the terminal manually, then _exit(2) directly — bypass bun's
+// globalExit → destructOnExit → JS cleanup chain where the UAFs live.
+// Instance.disposeAll() in the main finally block still runs for normal
+// (non-signal) exits.
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   process.on(sig, () => {
     const code = sig === "SIGINT" ? 130 : 143
@@ -55,8 +61,7 @@ for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     try {
       process.stdout.write("\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l")
     } catch {}
-    setTimeout(() => (process as any)._exit(code), 100).unref()
-    process.exit(code)
+    ;(process as any)._exit(code)
   })
 }
 

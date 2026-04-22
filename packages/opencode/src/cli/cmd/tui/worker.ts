@@ -15,6 +15,19 @@ import { writeHeapSnapshot } from "node:v8"
 import { WorkspaceID } from "@/control-plane/schema"
 import { Heap } from "@/cli/heap"
 
+// MUST be the first thing the worker does. Signals to the host process can be
+// delivered to ANY thread in the process; if the worker thread receives SIGINT
+// first and triggers a graceful pthread_exit, libgcc's _Unwind_Find_FDE walks
+// stack frames that reference renderer-owned memory the main thread is in the
+// middle of munmap()'ing during renderer.destroy() — SEGV at a freed FDE
+// pointer (observed faulting at addresses inside bun's text-segment gap).
+// Installing no-op handlers prevents Node/Bun's default signal action in this
+// thread, so SIGINT only acts on main where index.ts:49 calls _exit(2)
+// atomically. See gdb capture in the fix/memory-20695 thread.
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(sig, () => {})
+}
+
 await Log.init({
   print: process.argv.includes("--print-logs"),
   dev: Installation.isLocal(),
