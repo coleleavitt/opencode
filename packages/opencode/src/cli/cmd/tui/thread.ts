@@ -180,7 +180,12 @@ export const TuiThreadCommand = cmd({
               error: errorMessage(error),
             })
           })
-          worker.terminate()
+          // worker.terminate() removed: in non-PIE bun (link_eh_frame_hdr=false),
+          // any pthread_exit triggers libgcc's binary_search_unencoded_fdes
+          // which derefs raw FDE pointers and SEGVs in bun's .rodata/.text gap.
+          // shutdown RPC above gracefully drains the worker; process.exit(0)
+          // below kills the worker thread at the OS level without unwinding.
+          // Restore once bun ships --eh-frame-hdr (build.zig:801).
         }
 
         const prompt = await input(args.prompt)
@@ -239,7 +244,8 @@ export const TuiThreadCommand = cmd({
           await stop()
         }
       } finally {
-        worker.terminate()
+        // worker.terminate() removed: see stop() comment above. Redundant with
+        // process.exit(0) below, and triggers the libgcc unwind SEGV.
       }
     } finally {
       unguard?.()
