@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@opencode-ai/sdk/v2"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule, TuiThemeCurrent } from "@opencode-ai/plugin/tui"
 import { createMemo, For, Show } from "solid-js"
-import { useSync, type TokensLiveData } from "@tui/context/sync"
+import { useSync } from "@tui/context/sync"
 import { formatTokenNumber, formatCost } from "@/session/live-token-math"
 import { computeCacheHitRate } from "@/session/context-window"
 import { computeUsageCost, getModelPricing } from "@/session/pricing"
@@ -83,28 +83,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     return total
   })
 
-  const live = createMemo(() => sync.data.tokensLive[props.session_id] as TokensLiveData | undefined)
-
   const state = createMemo(() => {
-    const liveData = live()
-
-    if (liveData) {
-      const tokens = liveData.inputTokens + liveData.cacheReadTokens + liveData.cacheWriteTokens
-        + (liveData.phase === "final" ? liveData.outputTokens : 0)
-      const percent = liveData.contextLimit > 0
-        ? Math.round((tokens / liveData.contextLimit) * 100)
-        : null
-      return {
-        tokens,
-        percent,
-        input: liveData.inputTokens,
-        output: liveData.phase === "final" ? liveData.outputTokens : null,
-        cacheRead: liveData.cacheReadTokens,
-        cacheWrite: liveData.cacheWriteTokens,
-        streaming: liveData.phase === "streaming",
-      }
-    }
-
     const last = msg().findLast((item): item is AssistantMessage => item.role === "assistant" && item.tokens.output > 0)
     if (!last) {
       return {

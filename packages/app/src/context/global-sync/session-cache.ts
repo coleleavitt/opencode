@@ -22,14 +22,14 @@ type SessionCache = {
   question: Record<string, QuestionRequest[] | undefined>
 }
 
-export function sessionDiffStats(diffs: FileDiff[] | undefined) {
+export function sessionDiffStats(diffs: SnapshotFileDiff[] | undefined) {
   if (!diffs?.length) return { count: 0, bytes: 0 }
   let bytes = 0
-  for (const d of diffs) bytes += (d.before?.length ?? 0) + (d.after?.length ?? 0) + (d.patch?.length ?? 0)
+  for (const d of diffs) bytes += (d.patch?.length ?? 0)
   return { count: diffs.length, bytes }
 }
 
-export function warnOversizedSessionDiff(sessionID: string, diffs: FileDiff[] | undefined) {
+export function warnOversizedSessionDiff(sessionID: string, diffs: SnapshotFileDiff[] | undefined) {
   const s = sessionDiffStats(diffs)
   if (s.count >= DIFF_COUNT_WARN || s.bytes >= DIFF_BYTES_WARN) {
     console.warn("[session-cache] oversized diff", {

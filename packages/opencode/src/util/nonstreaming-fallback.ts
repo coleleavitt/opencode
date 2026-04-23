@@ -1,5 +1,5 @@
 import { generateText, type ModelMessage, type Tool, type LanguageModel } from "ai"
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 
 const log = Log.create({ service: "nonstreaming-fallback" })
 

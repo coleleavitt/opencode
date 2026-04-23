@@ -1,10 +1,12 @@
 import type { FilePart } from "@opencode-ai/sdk/v2"
 
-export function attached(part: FilePart) {
+type FilePartWithBlob = FilePart & { blob?: string }
+
+export function attached(part: FilePartWithBlob) {
   return part.url.startsWith("data:") || !!part.blob
 }
 
-export function src(part: FilePart) {
+export function src(part: FilePartWithBlob) {
   if (part.blob) return `/blob/${part.blob}`
   return part.url
 }

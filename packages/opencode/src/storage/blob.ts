@@ -1,7 +1,7 @@
 import path from "path"
 import fs from "fs/promises"
 import { Global } from "../global"
-import { Log } from "../util/log"
+import { Log } from "../util"
 
 const log = Log.create({ service: "blob" })
 const THRESHOLD = 64 * 1024
