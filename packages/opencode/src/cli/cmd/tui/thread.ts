@@ -1,20 +1,22 @@
 import { cmd } from "@/cli/cmd/cmd"
 import { tui } from "./app"
-import { Rpc } from "@/util/rpc"
+import { Rpc } from "@/util"
 import { type rpc } from "./worker"
 import path from "path"
 import { fileURLToPath } from "url"
 import { UI } from "@/cli/ui"
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 import { errorMessage } from "@/util/error"
 import { withTimeout } from "@/util/timeout"
-import { withNetworkOptions, resolveNetworkOptions } from "@/cli/network"
-import { Filesystem } from "@/util/filesystem"
-import type { Event } from "@opencode-ai/sdk/v2"
+import { withNetworkOptions, resolveNetworkOptionsNoConfig } from "@/cli/network"
+import { Filesystem } from "@/util"
+import type { GlobalEvent } from "@opencode-ai/sdk/v2"
+import type { EventSource } from "./context/sdk"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
-import { TuiConfig } from "@/config/tui"
-import { Instance } from "@/project/instance"
 import { writeHeapSnapshot } from "v8"
+import { TuiConfig } from "./config/tui"
+import { OPENCODE_PROCESS_ROLE, OPENCODE_RUN_ID, ensureRunID, sanitizedProcessEnv } from "@/util/opencode-process"
+import { validateSession } from "./validate-session"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
@@ -40,23 +42,12 @@ function createWorkerFetch(client: RpcClient): typeof fetch {
   return fn as typeof fetch
 }
 
-function createEventSource(client: RpcClient) {
-  const unsubs = new Set<() => void>()
+function createEventSource(client: RpcClient): EventSource {
   return {
-    on: (handler: (event: Event) => void) => {
-      const unsub = client.on<Event>("event", handler)
-      unsubs.add(unsub)
-      return () => {
-        unsubs.delete(unsub)
-        unsub()
-      }
-    },
-    setWorkspace: (workspaceID?: string) => {
-      void client.call("setWorkspace", { workspaceID })
-    },
-    cleanup: () => {
-      for (const unsub of unsubs) unsub()
-      unsubs.clear()
+    subscribe: async (handler) => {
+      return client.on<GlobalEvent>("global.event", (e) => {
+        handler(e)
+      })
     },
   }
 }
@@ -140,112 +131,118 @@ export const TuiThreadCommand = cmd({
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
+      const env = sanitizedProcessEnv({
+        [OPENCODE_PROCESS_ROLE]: "worker",
+        [OPENCODE_RUN_ID]: ensureRunID(),
+      })
 
       const worker = new Worker(file, {
-        env: Object.fromEntries(
-          Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-        ),
+        env,
       })
-      try {
-        worker.onerror = (e) => {
-          Log.Default.error(e)
-        }
-
-        const client = Rpc.client<typeof rpc>(worker)
-        const error = (e: unknown) => {
-          Log.Default.error(e)
-        }
-        const reload = () => {
-          client.call("reload", undefined).catch((err) => {
-            Log.Default.warn("worker reload failed", {
-              error: errorMessage(err),
-            })
-          })
-        }
-        process.on("uncaughtException", error)
-        process.on("unhandledRejection", error)
-        process.on("SIGUSR2", reload)
-
-        const events = createEventSource(client)
-        let stopped = false
-        const stop = async () => {
-          if (stopped) return
-          stopped = true
-          events.cleanup()
-          process.off("uncaughtException", error)
-          process.off("unhandledRejection", error)
-          process.off("SIGUSR2", reload)
-          await withTimeout(client.call("shutdown", undefined), 5000).catch((error) => {
-            Log.Default.warn("worker shutdown failed", {
-              error: errorMessage(error),
-            })
-          })
-          // worker.terminate() removed: in non-PIE bun (link_eh_frame_hdr=false),
-          // any pthread_exit triggers libgcc's binary_search_unencoded_fdes
-          // which derefs raw FDE pointers and SEGVs in bun's .rodata/.text gap.
-          // shutdown RPC above gracefully drains the worker; process.exit(0)
-          // below kills the worker thread at the OS level without unwinding.
-          // Restore once bun ships --eh-frame-hdr (build.zig:801).
-        }
-
-        const prompt = await input(args.prompt)
-        const config = await Instance.provide({
-          directory: cwd,
-          fn: () => TuiConfig.get(),
+      worker.onerror = (e) => {
+        Log.Default.error("thread error", {
+          message: e.message,
+          filename: e.filename,
+          lineno: e.lineno,
+          colno: e.colno,
+          error: e.error,
         })
+      }
 
-        const network = await resolveNetworkOptions(args)
-        const external =
-          process.argv.includes("--port") ||
-          process.argv.includes("--hostname") ||
-          process.argv.includes("--mdns") ||
-          network.mdns ||
-          network.port !== 0 ||
-          network.hostname !== "127.0.0.1"
-
-        const transport = external
-          ? {
-              url: (await client.call("server", network)).url,
-              fetch: undefined,
-              events: undefined,
-            }
-          : {
-              url: "http://opencode.internal",
-              fetch: createWorkerFetch(client),
-              events,
-            }
-
-        setTimeout(() => {
-          client.call("checkUpgrade", { directory: cwd }).catch(() => {})
-        }, 1000).unref?.()
-
-        try {
-          await tui({
-            url: transport.url,
-            async onSnapshot() {
-              const tui = writeHeapSnapshot("tui.heapsnapshot")
-              const server = await client.call("snapshot", undefined)
-              return [tui, server]
-            },
-            config,
-            directory: cwd,
-            fetch: transport.fetch,
-            events: transport.events,
-            args: {
-              continue: args.continue,
-              sessionID: args.session,
-              agent: args.agent,
-              model: args.model,
-              prompt,
-              fork: args.fork,
-            },
+      const client = Rpc.client<typeof rpc>(worker)
+      const error = (e: unknown) => {
+        Log.Default.error("process error", { error: errorMessage(e) })
+      }
+      const reload = () => {
+        client.call("reload", undefined).catch((err) => {
+          Log.Default.warn("worker reload failed", {
+            error: errorMessage(err),
           })
-        } finally {
-          await stop()
-        }
+        })
+      }
+      process.on("uncaughtException", error)
+      process.on("unhandledRejection", error)
+      process.on("SIGUSR2", reload)
+
+      let stopped = false
+      const stop = async () => {
+        if (stopped) return
+        stopped = true
+        process.off("uncaughtException", error)
+        process.off("unhandledRejection", error)
+        process.off("SIGUSR2", reload)
+        await withTimeout(client.call("shutdown", undefined), 5000).catch((error) => {
+          Log.Default.warn("worker shutdown failed", {
+            error: errorMessage(error),
+          })
+        })
+        worker.terminate()
+      }
+
+      const prompt = await input(args.prompt)
+      const config = await TuiConfig.get()
+
+      const network = resolveNetworkOptionsNoConfig(args)
+      const external =
+        process.argv.includes("--port") ||
+        process.argv.includes("--hostname") ||
+        process.argv.includes("--mdns") ||
+        network.mdns ||
+        network.port !== 0 ||
+        network.hostname !== "127.0.0.1"
+
+      const transport = external
+        ? {
+            url: (await client.call("server", network)).url,
+            fetch: undefined,
+            events: undefined,
+          }
+        : {
+            url: "http://opencode.internal",
+            fetch: createWorkerFetch(client),
+            events: createEventSource(client),
+          }
+
+      try {
+        await validateSession({
+          url: transport.url,
+          sessionID: args.session,
+          directory: cwd,
+          fetch: transport.fetch,
+        })
+      } catch (error) {
+        UI.error(errorMessage(error))
+        process.exitCode = 1
+        return
+      }
+
+      setTimeout(() => {
+        client.call("checkUpgrade", { directory: cwd }).catch(() => {})
+      }, 1000).unref?.()
+
+      try {
+        await tui({
+          url: transport.url,
+          async onSnapshot() {
+            const tui = writeHeapSnapshot("tui.heapsnapshot")
+            const server = await client.call("snapshot", undefined)
+            return [tui, server]
+          },
+          config,
+          directory: cwd,
+          fetch: transport.fetch,
+          events: transport.events,
+          args: {
+            continue: args.continue,
+            sessionID: args.session,
+            agent: args.agent,
+            model: args.model,
+            prompt,
+            fork: args.fork,
+          },
+        })
       } finally {
-        // worker.terminate() removed: see stop() comment above. Redundant with
-        // process.exit(0) below, and triggers the libgcc unwind SEGV.
+        await stop()
       }
     } finally {
       unguard?.()
@@ -253,3 +250,4 @@ export const TuiThreadCommand = cmd({
     process.exit(0)
   },
 })
+// scratch

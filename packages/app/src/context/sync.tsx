@@ -1,7 +1,7 @@
 import { batch, createMemo } from "solid-js"
 import { createStore, produce, reconcile } from "solid-js/store"
-import { Binary } from "@opencode-ai/util/binary"
-import { retry } from "@opencode-ai/util/retry"
+import { Binary } from "@opencode-ai/shared/util/binary"
+import { retry } from "@opencode-ai/shared/util/retry"
 import { createSimpleContext } from "@opencode-ai/ui/context"
 import {
   clearSessionPrefetch,
@@ -12,12 +12,8 @@ import {
 import { useGlobalSync } from "./global-sync"
 import { useSDK } from "./sdk"
 import type { Message, Part } from "@opencode-ai/sdk/v2/client"
-import {
-  SESSION_CACHE_LIMIT,
-  dropSessionCaches,
-  pickSessionCacheEvictions,
-  warnOversizedSessionDiff,
-} from "./global-sync/session-cache"
+import { SESSION_CACHE_LIMIT, dropSessionCaches, pickSessionCacheEvictions } from "./global-sync/session-cache"
+import { diffs as list, message as clean } from "@/utils/diffs"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 
@@ -305,7 +301,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         input.client.session.messages({ sessionID: input.sessionID, limit: input.limit, before: input.before }),
       )
       const items = (messages.data ?? []).filter((x) => !!x?.info?.id)
-      const session = items.map((x) => x.info).sort((a, b) => cmp(a.id, b.id))
+      const session = items.map((x) => clean(x.info)).sort((a, b) => cmp(a.id, b.id))
       const part = items.map((message) => ({ id: message.info.id, part: sortParts(message.parts) }))
       const cursor = messages.response.headers.get("x-next-cursor") ?? undefined
       return {
@@ -421,8 +417,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             role: "user",
             time: { created: Date.now() },
             agent: input.agent,
-            model: input.model,
-            variant: input.variant,
+            model: { ...input.model, variant: input.variant },
           }
           const [, setStore] = target()
           setOptimistic(sdk.directory, input.sessionID, { message, parts: input.parts })
@@ -515,9 +510,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           return runInflight(inflightDiff, key, () =>
             retry(() => client.session.diff({ sessionID })).then((diff) => {
               if (!tracked(directory, sessionID)) return
-              const data = diff.data ?? []
-              warnOversizedSessionDiff(sessionID, data)
-              setStore("session_diff", sessionID, reconcile(data, { key: "file" }))
+              setStore("session_diff", sessionID, reconcile(list(diff.data), { key: "file" }))
             }),
           )
         },

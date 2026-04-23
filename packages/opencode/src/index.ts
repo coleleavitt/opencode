@@ -2,7 +2,7 @@ import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import { RunCommand } from "./cli/cmd/run"
 import { GenerateCommand } from "./cli/cmd/generate"
-import { Log } from "./util/log"
+import { Log } from "./util"
 import { ConsoleCommand } from "./cli/cmd/account"
 import { ProvidersCommand } from "./cli/cmd/providers"
 import { AgentCommand } from "./cli/cmd/agent"
@@ -11,10 +11,11 @@ import { UninstallCommand } from "./cli/cmd/uninstall"
 import { ModelsCommand } from "./cli/cmd/models"
 import { UI } from "./cli/ui"
 import { Installation } from "./installation"
-import { NamedError } from "@opencode-ai/util/error"
+import { InstallationVersion } from "./installation/version"
+import { NamedError } from "@opencode-ai/shared/util/error"
 import { FormatError } from "./cli/error"
 import { ServeCommand } from "./cli/cmd/serve"
-import { Filesystem } from "./util/filesystem"
+import { Filesystem } from "./util"
 import { DebugCommand } from "./cli/cmd/debug"
 import { StatsCommand } from "./cli/cmd/stats"
 import { McpCommand } from "./cli/cmd/mcp"
@@ -31,14 +32,18 @@ import { SessionCommand } from "./cli/cmd/session"
 import { DbCommand } from "./cli/cmd/db"
 import path from "path"
 import { Global } from "./global"
-import { JsonMigration } from "./storage/json-migration"
-import { Database } from "./storage/db"
+import { JsonMigration } from "./storage"
+import { Database } from "./storage"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
 import { runCleanup } from "./util/cleanup"
 import { Instance } from "./project/instance"
 import { setNonDumpable } from "./util/security"
 import { Heap } from "./cli/heap"
+import { drizzle } from "drizzle-orm/bun-sqlite"
+import { ensureProcessMetadata } from "./util/opencode-process"
+
+const processMetadata = ensureProcessMetadata("main")
 
 setNonDumpable()
 
@@ -48,8 +53,8 @@ setNonDumpable()
 //    VM teardown path partially executed; dispatch tables retain stale
 //    function pointers; a trailing microtask jumps into freed code,
 //    surfacing as SIGSEGV at a text-segment address on Ctrl+C.
-// Restore the terminal manually, then _exit(2) directly — bypass bun's
-// globalExit → destructOnExit → JS cleanup chain where the UAFs live.
+// Restore the terminal manually, then _exit(2) directly -- bypass bun's
+// globalExit -> destructOnExit -> JS cleanup chain where the UAFs live.
 // Instance.disposeAll() in the main finally block still runs for normal
 // (non-signal) exits.
 for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
@@ -77,13 +82,25 @@ process.on("uncaughtException", (e) => {
   })
 })
 
-const cli = yargs(hideBin(process.argv))
+const args = hideBin(process.argv)
+
+function show(out: string) {
+  const text = out.trimStart()
+  if (!text.startsWith("opencode ")) {
+    process.stderr.write(UI.logo() + EOL + EOL)
+    process.stderr.write(text)
+    return
+  }
+  process.stderr.write(out)
+}
+
+const cli = yargs(args)
   .parserConfiguration({ "populate--": true })
   .scriptName("opencode")
   .wrap(100)
   .help("help", "show help")
   .alias("help", "h")
-  .version("version", "show version number", Installation.VERSION)
+  .version("version", "show version number", InstallationVersion)
   .alias("version", "v")
   .option("print-logs", {
     describe: "print logs to stderr",
@@ -120,8 +137,10 @@ const cli = yargs(hideBin(process.argv))
     process.env.OPENCODE_PID = String(process.pid)
 
     Log.Default.info("opencode", {
-      version: Installation.VERSION,
+      version: InstallationVersion,
       args: process.argv.slice(2),
+      process_role: processMetadata.processRole,
+      run_id: processMetadata.runID,
     })
 
     const marker = path.join(Global.Path.data, "opencode.db")
@@ -135,7 +154,7 @@ const cli = yargs(hideBin(process.argv))
       let last = -1
       if (tty) process.stderr.write("\x1b[?25l")
       try {
-        await JsonMigration.run(Database.Client().$client, {
+        await JsonMigration.run(drizzle({ client: Database.Client().$client }), {
           progress: (event) => {
             const percent = Math.floor((event.current / event.total) * 100)
             if (percent === last && event.current !== event.total) return
@@ -161,7 +180,7 @@ const cli = yargs(hideBin(process.argv))
       process.stderr.write("Database migration complete." + EOL)
     }
   })
-  .usage("\n" + UI.logo())
+  .usage("")
   .completion("completion", "generate shell completion script")
   .command(AcpCommand)
   .command(McpCommand)
@@ -193,7 +212,7 @@ const cli = yargs(hideBin(process.argv))
       msg?.startsWith("Invalid values:")
     ) {
       if (err) throw err
-      cli.showHelp("log")
+      cli.showHelp(show)
     }
     if (err) throw err
     process.exit(1)
@@ -201,7 +220,15 @@ const cli = yargs(hideBin(process.argv))
   .strict()
 
 try {
-  await cli.parse()
+  if (args.includes("-h") || args.includes("--help")) {
+    await cli.parse(args, (err: Error | undefined, _argv: unknown, out: string) => {
+      if (err) throw err
+      if (!out) return
+      show(out)
+    })
+  } else {
+    await cli.parse()
+  }
 } catch (e) {
   let data: Record<string, any> = {}
   if (e instanceof NamedError) {

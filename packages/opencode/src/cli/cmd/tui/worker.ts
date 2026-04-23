@@ -1,32 +1,19 @@
 import { Installation } from "@/installation"
 import { Server } from "@/server/server"
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 import { Instance } from "@/project/instance"
 import { InstanceBootstrap } from "@/project/bootstrap"
-import { Rpc } from "@/util/rpc"
+import { Rpc } from "@/util"
 import { upgrade } from "@/cli/upgrade"
-import { Config } from "@/config/config"
-import { Bus } from "@/bus"
+import { Config } from "@/config"
 import { GlobalBus } from "@/bus/global"
-import type { Event } from "@opencode-ai/sdk/v2"
 import { Flag } from "@/flag/flag"
-import { setTimeout as sleep } from "node:timers/promises"
 import { writeHeapSnapshot } from "node:v8"
-import { WorkspaceID } from "@/control-plane/schema"
 import { Heap } from "@/cli/heap"
+import { AppRuntime } from "@/effect/app-runtime"
+import { ensureProcessMetadata } from "@/util/opencode-process"
 
-// MUST be the first thing the worker does. Signals to the host process can be
-// delivered to ANY thread in the process; if the worker thread receives SIGINT
-// first and triggers a graceful pthread_exit, libgcc's _Unwind_Find_FDE walks
-// stack frames that reference renderer-owned memory the main thread is in the
-// middle of munmap()'ing during renderer.destroy() — SEGV at a freed FDE
-// pointer (observed faulting at addresses inside bun's text-segment gap).
-// Installing no-op handlers prevents Node/Bun's default signal action in this
-// thread, so SIGINT only acts on main where index.ts:49 calls _exit(2)
-// atomically. See gdb capture in the fix/memory-20695 thread.
-for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-  process.on(sig, () => {})
-}
+ensureProcessMetadata("worker")
 
 await Log.init({
   print: process.argv.includes("--print-logs"),
@@ -58,74 +45,6 @@ GlobalBus.on("event", (event) => {
 
 let server: Awaited<ReturnType<typeof Server.listen>> | undefined
 
-const eventStream = {
-  abort: undefined as AbortController | undefined,
-}
-
-const startEventStream = (input: { directory: string; workspaceID?: string }) => {
-  if (eventStream.abort) eventStream.abort.abort()
-  const abort = new AbortController()
-  eventStream.abort = abort
-  const signal = abort.signal
-
-  ;(async () => {
-    while (!signal.aborted) {
-      const shouldReconnect = await Instance.provide({
-        directory: input.directory,
-        init: InstanceBootstrap,
-        fn: () =>
-          new Promise<boolean>((resolve) => {
-            Rpc.emit("event", {
-              type: "server.connected",
-              properties: {},
-            } satisfies Event)
-
-            let settled = false
-            const settle = (value: boolean) => {
-              if (settled) return
-              settled = true
-              signal.removeEventListener("abort", onAbort)
-              unsub()
-              resolve(value)
-            }
-
-            const unsub = Bus.subscribeAll((event) => {
-              Rpc.emit("event", event as Event)
-              if (event.type === Bus.InstanceDisposed.type) {
-                settle(true)
-              }
-            })
-
-            const onAbort = () => {
-              settle(false)
-            }
-
-            signal.addEventListener("abort", onAbort, { once: true })
-          }),
-      }).catch((error) => {
-        Log.Default.error("event stream subscribe error", {
-          error: error instanceof Error ? error.message : error,
-        })
-        return false
-      })
-
-      if (!shouldReconnect || signal.aborted) {
-        break
-      }
-
-      if (!signal.aborted) {
-        await sleep(250)
-      }
-    }
-  })().catch((error) => {
-    Log.Default.error("event stream error", {
-      error: error instanceof Error ? error.message : error,
-    })
-  })
-}
-
-startEventStream({ directory: process.cwd() })
-
 export const rpc = {
   async fetch(input: { url: string; method: string; headers: Record<string, string>; body?: string }) {
     const headers = { ...input.headers }
@@ -138,7 +57,7 @@ export const rpc = {
       headers,
       body: input.body,
     })
-    const response = await Server.Default().fetch(request)
+    const response = await Server.Default().app.fetch(request)
     const body = await response.text()
     return {
       status: response.status,
@@ -158,21 +77,18 @@ export const rpc = {
   async checkUpgrade(input: { directory: string }) {
     await Instance.provide({
       directory: input.directory,
-      init: InstanceBootstrap,
+      init: () => AppRuntime.runPromise(InstanceBootstrap),
       fn: async () => {
         await upgrade().catch(() => {})
       },
     })
   },
   async reload() {
-    await Config.invalidate(true)
-  },
-  async setWorkspace(input: { workspaceID?: string }) {
-    startEventStream({ directory: process.cwd(), workspaceID: input.workspaceID })
+    await AppRuntime.runPromise(Config.Service.use((cfg) => cfg.invalidate(true)))
   },
   async shutdown() {
     Log.Default.info("worker shutting down")
-    if (eventStream.abort) eventStream.abort.abort()
+
     await Instance.disposeAll()
     if (server) await server.stop(true)
   },
