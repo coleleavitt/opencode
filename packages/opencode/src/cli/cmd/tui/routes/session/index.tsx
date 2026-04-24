@@ -21,6 +21,7 @@ import { useSync } from "@tui/context/sync"
 import { useEvent } from "@tui/context/event"
 import { SplitBorder } from "@tui/component/border"
 import { Spinner } from "@tui/component/spinner"
+import { createNowTick } from "@tui/util/signal"
 import { selectedForeground, useTheme } from "@tui/context/theme"
 import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "@tui/component/prompt"
@@ -1997,6 +1998,12 @@ function Task(props: ToolProps<typeof TaskTool>) {
 
   const isRunning = createMemo(() => props.part.state.status === "running")
 
+  // Live tick for running tasks so the elapsed-time status line stays
+  // fresh. 1s cadence matches what the user expects from a subagent
+  // "running for X" display. Only consulted when a Task is running —
+  // completed tasks read from st.time.end directly, no tick needed.
+  const now = createNowTick(1_000)
+
   const duration = createMemo(() => {
     // Primary: use the Task tool-part's own start/end timestamps —
     // ToolStateCompleted schema guarantees both fields are populated
@@ -2009,10 +2016,16 @@ function Task(props: ToolProps<typeof TaskTool>) {
     if (st.status === "completed" && st.time?.start != null && st.time?.end != null) {
       return st.time.end - st.time.start
     }
+    // Running: compute elapsed against the Task tool-part's start
+    // timestamp (ToolStateRunning guarantees time.start at
+    // message-v2.ts:295-297). Re-evaluates every tick via now(), so
+    // the user sees "3s", "4s", "5s"… advance while the subagent
+    // works.
+    if (st.status === "running" && st.time?.start != null) {
+      return now() - st.time.start
+    }
     // Fallback: derive from the child session's own message stream for
-    // states where the Task tool-part doesn't carry a completion time
-    // (running, pending). Keeps the display alive while the task is
-    // still in flight.
+    // states where the Task tool-part doesn't carry timestamps (rare).
     const first = messages().find((x) => x.role === "user")?.time.created
     const assistant = messages().findLast((x) => x.role === "assistant")?.time.completed
     if (!first || !assistant) return 0
@@ -2023,13 +2036,22 @@ function Task(props: ToolProps<typeof TaskTool>) {
     if (!props.input.description) return ""
     let content = [`${Locale.titlecase(props.input.subagent_type ?? "General")} Task — ${props.input.description}`]
 
-    if (isRunning() && tools().length > 0) {
-      // content[0] += ` · ${tools().length} toolcalls`
-      if (current()) {
-        const state = current()!.state
-        const title = state.status === "running" || state.status === "completed" ? state.title : undefined
-        content.push(`↳ ${Locale.titlecase(current()!.tool)} ${title}`)
-      } else content.push(`↳ ${tools().length} toolcalls`)
+    if (isRunning()) {
+      if (tools().length > 0) {
+        if (current()) {
+          const state = current()!.state
+          const title = state.status === "running" || state.status === "completed" ? state.title : undefined
+          content.push(`↳ ${Locale.titlecase(current()!.tool)} ${title} · ${Locale.duration(duration())}`)
+        } else content.push(`↳ ${tools().length} toolcalls · ${Locale.duration(duration())}`)
+      } else {
+        // Running with zero toolcalls — the subagent is dispatched but
+        // hasn't reported its first tool call back yet. Before, this
+        // rendered as a bare one-line spinner with no context; the
+        // user couldn't tell whether the task was stuck, queued, or
+        // just about to start. Now we show the dispatching state +
+        // live elapsed so there's always a status line.
+        content.push(`↳ dispatching… · ${Locale.duration(duration())}`)
+      }
     }
 
     if (props.part.state.status === "completed") {
