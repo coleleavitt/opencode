@@ -7,6 +7,7 @@ import {
   For,
   Match,
   on,
+  onCleanup,
   onMount,
   Show,
   Switch,
@@ -221,7 +222,10 @@ export function Session() {
   })
 
   let lastSwitch: string | undefined = undefined
-  event.on("message.part.updated", (evt) => {
+  // Capture disposers so navigating away from the session (or it
+  // re-mounting) doesn't leave orphaned SDK event listeners that
+  // double-fire on re-entry.
+  const disposeMessagePartUpdated = event.on("message.part.updated", (evt) => {
     const part = evt.properties.part
     if (part.type !== "tool") return
     if (part.sessionID !== route.sessionID) return
@@ -236,6 +240,7 @@ export function Session() {
       lastSwitch = part.id
     }
   })
+  onCleanup(() => disposeMessagePartUpdated?.())
 
   let seeded = false
   let scroll: ScrollBoxRenderable
@@ -251,7 +256,7 @@ export function Session() {
   const dialog = useDialog()
   const renderer = useRenderer()
 
-  event.on("session.status", (evt) => {
+  const disposeSessionStatus = event.on("session.status", (evt) => {
     if (evt.properties.sessionID !== route.sessionID) return
     if (evt.properties.status.type !== "retry") return
     if (evt.properties.status.message !== SessionRetry.GO_UPSELL_MESSAGE) return
@@ -267,6 +272,7 @@ export function Session() {
       kv.set(GO_UPSELL_LAST_SEEN_AT, Date.now())
     })
   })
+  onCleanup(() => disposeSessionStatus?.())
 
   // Allow exit when in child session (prompt is hidden)
   const exit = useExit()

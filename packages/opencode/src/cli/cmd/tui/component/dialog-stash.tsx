@@ -2,6 +2,7 @@ import { useDialog } from "@tui/ui/dialog"
 import { DialogSelect } from "@tui/ui/dialog-select"
 import { createMemo, createSignal } from "solid-js"
 import { Locale } from "@/util"
+import { createNowTick } from "../util/signal"
 import { useTheme } from "../context/theme"
 import { useKeybind } from "../context/keybind"
 import { usePromptStash, type StashEntry } from "./prompt/stash"
@@ -33,9 +34,16 @@ export function DialogStash(props: { onSelect: (entry: StashEntry) => void }) {
   const keybind = useKeybind()
 
   const [toDelete, setToDelete] = createSignal<number>()
+  // getRelativeTime(...) computes `Date.now() - entry.timestamp`. Without
+  // a live signal as a dep the memo only re-runs when stash.list() or
+  // toDelete() change, and the dialog renders "5m ago" that never
+  // advances to "6m ago". Tick once per minute — "just now" → "1m ago"
+  // resolution is what the user actually notices.
+  const now = createNowTick(60_000)
 
   const options = createMemo(() => {
     const entries = stash.list()
+    now()
     // Show most recent first
     return entries
       .map((entry, index) => {
