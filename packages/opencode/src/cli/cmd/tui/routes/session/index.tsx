@@ -1998,6 +1998,21 @@ function Task(props: ToolProps<typeof TaskTool>) {
   const isRunning = createMemo(() => props.part.state.status === "running")
 
   const duration = createMemo(() => {
+    // Primary: use the Task tool-part's own start/end timestamps —
+    // ToolStateCompleted schema guarantees both fields are populated
+    // when status="completed" (message-v2.ts:309-313). This is reliable
+    // and synchronous — no dependency on the child session's message
+    // stream syncing back, which previously caused "N toolcalls · 0ms"
+    // to render for completed tasks whose child session's final
+    // assistant message.time.completed hadn't synced yet.
+    const st = props.part.state
+    if (st.status === "completed" && st.time?.start != null && st.time?.end != null) {
+      return st.time.end - st.time.start
+    }
+    // Fallback: derive from the child session's own message stream for
+    // states where the Task tool-part doesn't carry a completion time
+    // (running, pending). Keeps the display alive while the task is
+    // still in flight.
     const first = messages().find((x) => x.role === "user")?.time.created
     const assistant = messages().findLast((x) => x.role === "assistant")?.time.completed
     if (!first || !assistant) return 0
