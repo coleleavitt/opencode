@@ -2034,7 +2034,23 @@ function Task(props: ToolProps<typeof TaskTool>) {
 
   const content = createMemo(() => {
     if (!props.input.description) return ""
-    let content = [`${Locale.titlecase(props.input.subagent_type ?? "General")} Task — ${props.input.description}`]
+    // Plugin-provided task tools (e.g. oh-my-opencode) accept `category`
+    // as an alternative to `subagent_type` — the LLM calls
+    // task(category="visual-engineering", ...) and the plugin's
+    // execute fn internally resolves it to a real subagent
+    // (sisyphus-junior in omo's case). But the tool_use block OpenCode
+    // persists contains only the LLM's original args, so subagent_type
+    // is undefined and the render here used to fall back to "General
+    // Task" even when a specific category was dispatched. Prefer
+    // category when subagent_type is absent so the inline label
+    // matches what the LLM actually said.
+    const rawInput = props.input as { subagent_type?: string; category?: string }
+    const label = rawInput.subagent_type?.trim()
+      ? rawInput.subagent_type
+      : rawInput.category?.trim()
+        ? rawInput.category
+        : "General"
+    let content = [`${Locale.titlecase(label)} Task — ${props.input.description}`]
 
     if (isRunning()) {
       if (tools().length > 0) {
