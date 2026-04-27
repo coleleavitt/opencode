@@ -2029,7 +2029,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
 
   const duration = createMemo(() => {
     const st = props.part.state
-    if (childActive() && st.time?.start != null) {
+    if (childActive() && st.status !== "pending" && st.time?.start != null) {
       return now() - st.time.start
     }
     if (st.status === "completed" && st.time?.start != null) {
