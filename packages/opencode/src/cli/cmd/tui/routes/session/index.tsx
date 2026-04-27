@@ -2078,13 +2078,14 @@ function Task(props: ToolProps<typeof TaskTool>) {
           content.push(`↳ ${Locale.titlecase(current()!.tool)} ${title} · ${Locale.duration(duration())}`)
         } else content.push(`↳ ${tools().length} toolcalls · ${Locale.duration(duration())}`)
       } else {
-        // Running with zero toolcalls — the subagent is dispatched but
-        // hasn't reported its first tool call back yet. Before, this
-        // rendered as a bare one-line spinner with no context; the
-        // user couldn't tell whether the task was stuck, queued, or
-        // just about to start. Now we show the dispatching state +
-        // live elapsed so there's always a status line.
-        content.push(`↳ dispatching… · ${Locale.duration(duration())}`)
+        // Running with zero toolcalls — child hasn't reported a tool yet.
+        // Show "dispatching" only briefly; flip to "running" once enough
+        // time has passed that the child must have spun up (avoids the
+        // misleading "stuck on dispatching after 2min" UX). 10s threshold
+        // matches typical session-create + first-token latency.
+        const elapsed = duration()
+        const phase = elapsed < 10000 ? "dispatching…" : "running…"
+        content.push(`↳ ${phase} · ${Locale.duration(elapsed)}`)
       }
     }
 
