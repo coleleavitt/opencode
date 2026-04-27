@@ -232,6 +232,26 @@ export const SubtaskPart = Schema.Struct({
   .pipe(withStatics((s) => ({ zod: zod(s) })))
 export type SubtaskPart = Types.DeepMutable<Schema.Schema.Type<typeof SubtaskPart>>
 
+export const BackgroundTaskNotificationPart = Schema.Struct({
+  ...partBase,
+  type: Schema.Literal("background_task_notification"),
+  task_id: Schema.String,
+  agent_name: Schema.String,
+  status: Schema.Literals(["completed", "failed", "killed"]),
+  summary: Schema.String,
+  result: Schema.optional(Schema.String),
+  error: Schema.optional(Schema.String),
+  time: Schema.Struct({
+    start: Schema.Number,
+    end: Schema.Number,
+  }),
+})
+  .annotate({ identifier: "BackgroundTaskNotificationPart" })
+  .pipe(withStatics((s) => ({ zod: zod(s) })))
+export type BackgroundTaskNotificationPart = Types.DeepMutable<
+  Schema.Schema.Type<typeof BackgroundTaskNotificationPart>
+>
+
 export const RetryPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("retry"),
@@ -409,6 +429,7 @@ const _Part = Schema.Union([
   AgentPart,
   RetryPart,
   CompactionPart,
+  BackgroundTaskNotificationPart,
 ]).annotate({ discriminator: "type", identifier: "Part" })
 export const Part = Object.assign(_Part, {
   zod: zod(_Part) as unknown as z.ZodType<
@@ -424,6 +445,7 @@ export const Part = Object.assign(_Part, {
     | AgentPart
     | RetryPart
     | CompactionPart
+    | BackgroundTaskNotificationPart
   >,
 })
 export type Part =
@@ -439,6 +461,7 @@ export type Part =
   | AgentPart
   | RetryPart
   | CompactionPart
+  | BackgroundTaskNotificationPart
 
 // Errors are still NamedError-based Zod; bridge via ZodOverride so the derived
 // Zod + JSON Schema emit the original discriminatedUnion shape. Migrating the

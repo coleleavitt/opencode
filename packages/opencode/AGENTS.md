@@ -1,3 +1,30 @@
+# Background tasks (cc119 parity)
+
+The `task` tool accepts `run_in_background: true` to dispatch a subagent as a fire-and-forget background fiber. The call returns immediately with a `task_id`; the parent receives a `BackgroundTaskNotificationPart` on the next user turn when the task finishes.
+
+```ts
+// LLM-facing usage:
+task({ subagent_type: "explore", prompt: "...", description: "scan", run_in_background: true })
+// → { status: "async_launched", task_id, agent_name, started_at }
+```
+
+Companion tools:
+
+- `task_status({ task_id })` — poll a running/completed/failed/killed task. Returns `{status: "unknown"}` when the id is not registered. Cross-session lookups yield `TaskStatusCrossSessionError`.
+- `task_cancel({ task_id })` — abort a running task. Returns `{status: "killed" | "already_completed" | "already_failed" | "unknown"}`.
+
+Concurrency cap: `cfg.task.max_concurrent_background` (default 8). The 9th simultaneous launch fails with `BackgroundTaskCapacityError`.
+
+Disable globally with `OPENCODE_DISABLE_BACKGROUND_TASKS=1` (env var). The `run_in_background` parameter is then stripped from the schema and the `task_status` / `task_cancel` tools are not registered.
+
+The CLI exposes `opencode tasks --session-id <id>` to list tasks for a given parent session.
+
+# Fork mode (cc119 parity)
+
+Omitting `subagent_type` triggers an implicit fork that inherits the parent's full conversation context. Forks cannot be spawned recursively (a `RecursiveForkError` is raised when the parent agent itself is the `fork` agent). The `fork` builtin agent is `hidden: true` so it does not appear in agent autocomplete.
+
+For agents that should fork only the latest user turn (not the full history), set `forks_parent_context: "turn"` in the agent definition. Set `true` to forward the entire history. Forwarded messages are token-budget truncated (default ~100k tokens) from the oldest end with a `<truncated>` marker.
+
 # opencode database guide
 
 ## Database

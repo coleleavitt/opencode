@@ -68,6 +68,142 @@ test("plan agent denies edits except .opencode/plans/*", async () => {
   })
 })
 
+test("plan agent omits project context (cc119 omitClaudeMd parity)", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const plan = await load(tmp.path, (svc) => svc.get("plan"))
+      expect(plan?.omit_project_context).toBe(true)
+    },
+  })
+})
+
+test("default agents do not omit project context", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const build = await load(tmp.path, (svc) => svc.get("build"))
+      const general = await load(tmp.path, (svc) => svc.get("general"))
+      const explore = await load(tmp.path, (svc) => svc.get("explore"))
+      expect(build?.omit_project_context).toBeUndefined()
+      expect(general?.omit_project_context).toBeUndefined()
+      expect(explore?.omit_project_context).toBeUndefined()
+    },
+  })
+})
+
+test("fork agent: registered as builtin subagent that inherits parent context", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const fork = await load(tmp.path, (svc) => svc.get("fork"))
+      expect(fork).toBeDefined()
+      expect(fork?.name).toBe("fork")
+      expect(fork?.mode).toBe("subagent")
+      expect(fork?.native).toBe(true)
+      expect(fork?.hidden).toBe(true)
+      expect(fork?.forks_parent_context).toBe(true)
+    },
+  })
+})
+
+test("non-fork builtin agents do not declare forks_parent_context", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const build = await load(tmp.path, (svc) => svc.get("build"))
+      const general = await load(tmp.path, (svc) => svc.get("general"))
+      const explore = await load(tmp.path, (svc) => svc.get("explore"))
+      const plan = await load(tmp.path, (svc) => svc.get("plan"))
+      expect(build?.forks_parent_context).toBeUndefined()
+      expect(general?.forks_parent_context).toBeUndefined()
+      expect(explore?.forks_parent_context).toBeUndefined()
+      expect(plan?.forks_parent_context).toBeUndefined()
+    },
+  })
+})
+
+test("config-defined agent honors forks_parent_context flag with literal turn", async () => {
+  await using tmp = await tmpdir({
+    config: {
+      agent: {
+        myforker: {
+          mode: "subagent",
+          forks_parent_context: "turn",
+        },
+      },
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const myforker = await load(tmp.path, (svc) => svc.get("myforker"))
+      expect(myforker?.forks_parent_context).toBe("turn")
+    },
+  })
+})
+
+test("agent.get() falls back to case-insensitive name match", async () => {
+  await using tmp = await tmpdir({
+    config: {
+      agent: {
+        "Reviewer - Code Critic": {
+          mode: "subagent",
+          description: "Display-name registered agent",
+        },
+      },
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const exact = await load(tmp.path, (svc) => svc.get("Reviewer - Code Critic"))
+      expect(exact?.name).toBe("Reviewer - Code Critic")
+
+      const lowered = await load(tmp.path, (svc) => svc.get("reviewer - code critic"))
+      expect(lowered?.name).toBe("Reviewer - Code Critic")
+
+      const upcased = await load(tmp.path, (svc) => svc.get("REVIEWER - CODE CRITIC"))
+      expect(upcased?.name).toBe("Reviewer - Code Critic")
+    },
+  })
+})
+
+test("agent.get() returns undefined for genuinely unknown agent", async () => {
+  await using tmp = await tmpdir()
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const missing = await load(tmp.path, (svc) => svc.get("absolutely-not-a-real-agent"))
+      expect(missing).toBeUndefined()
+    },
+  })
+})
+
+test("config-defined agent honors omit_project_context flag", async () => {
+  await using tmp = await tmpdir({
+    config: {
+      agent: {
+        myagent: {
+          mode: "subagent",
+          omit_project_context: true,
+        },
+      },
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const myagent = await load(tmp.path, (svc) => svc.get("myagent"))
+      expect(myagent?.omit_project_context).toBe(true)
+    },
+  })
+})
+
 test("explore agent denies edit and write", async () => {
   await using tmp = await tmpdir()
   await Instance.provide({

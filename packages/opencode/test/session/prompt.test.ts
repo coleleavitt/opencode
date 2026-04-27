@@ -28,6 +28,8 @@ import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
+import { PendingTaskNotifications } from "../../src/task-background/pending-notifications"
+import { TaskBackgroundRegistry } from "../../src/task-background/registry"
 import { SessionRunState } from "../../src/session/run-state"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
@@ -177,6 +179,8 @@ function makeHttp() {
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(Ripgrep.defaultLayer),
     Layer.provide(Format.defaultLayer),
+    Layer.provide(TaskBackgroundRegistry.defaultLayer),
+    Layer.provide(PendingTaskNotifications.defaultLayer),
     Layer.provideMerge(todo),
     Layer.provideMerge(question),
     Layer.provideMerge(deps),
@@ -196,6 +200,7 @@ function makeHttp() {
       Layer.provideMerge(trunc),
       Layer.provide(Instruction.defaultLayer),
       Layer.provide(SystemPrompt.defaultLayer),
+      Layer.provide(PendingTaskNotifications.defaultLayer),
       Layer.provideMerge(deps),
     ),
   ).pipe(Layer.provide(summary))

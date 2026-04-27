@@ -37,6 +37,7 @@ import type {
 import { useLocal } from "@tui/context/local"
 import { Locale } from "@/util"
 import type { Tool } from "@/tool"
+import { isTaskToolName } from "@/tool/task-name"
 import type { ReadTool } from "@/tool/read"
 import type { WriteTool } from "@/tool/write"
 import { BashTool } from "@/tool/bash"
@@ -1393,7 +1394,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           )
         }}
       </For>
-      <Show when={props.parts.some((x) => x.type === "tool" && x.tool === "task")}>
+      <Show when={props.parts.some((x) => x.type === "tool" && isTaskToolName(x.tool))}>
         <box paddingTop={1} paddingLeft={3}>
           <text fg={theme.text}>
             {keybind.print("session_child_first")}
@@ -1584,7 +1585,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={props.part.tool === "edit"}>
           <Edit {...toolprops} />
         </Match>
-        <Match when={props.part.tool === "task"}>
+        <Match when={isTaskToolName(props.part.tool)}>
           <Task {...toolprops} />
         </Match>
         <Match when={props.part.tool === "apply_patch"}>
@@ -1996,36 +1997,53 @@ function Task(props: ToolProps<typeof TaskTool>) {
     tools().findLast((x) => (x.state.status === "running" || x.state.status === "completed") && x.state.title),
   )
 
-  const isRunning = createMemo(() => props.part.state.status === "running")
-
-  // Live tick for running tasks so the elapsed-time status line stays
-  // fresh. 1s cadence matches what the user expects from a subagent
-  // "running for X" display. Only consulted when a Task is running —
-  // completed tasks read from st.time.end directly, no tick needed.
   const now = createNowTick(1_000)
 
+  // Background-dispatched tasks complete the parent tool-part at dispatch
+  // (time.end stamped in ~100-500ms) while the subagent keeps working.
+  // Three-signal priority to determine whether the subagent is actually
+  // running, in decreasing authoritativeness:
+  //   1. sync.data.session_status[id] — server-side SessionStatus, set at
+  //      runLoop() BEFORE the new assistant message is created. Survives
+  //      reconnect via bootstrap hydrate from GET /session/status. Immune
+  //      to the session-resumption stale-message race.
+  //   2. Last message role is "user" — catches the ~1ms window between
+  //      createUserMessage() firing message.updated and runLoop() firing
+  //      status.set(busy).
+  //   3. Last assistant message has no time.completed — fallback for the
+  //      pre-bootstrap window (fresh dispatch, no SSE event yet, status
+  //      map not yet populated for this child session).
+  const childActive = createMemo(() => {
+    const id = props.metadata.sessionId
+    if (!id) return false
+    const status = sync.data.session_status?.[id]
+    if (status?.type === "busy" || status?.type === "retry") return true
+    const msgs = messages()
+    if (msgs.at(-1)?.role === "user") return true
+    if (status?.type === "idle") return false
+    const last = msgs.findLast((x) => x.role === "assistant")
+    return last != null && last.time?.completed == null
+  })
+
+  const isRunning = createMemo(() => props.part.state.status === "running" || childActive())
+
   const duration = createMemo(() => {
-    // Primary: use the Task tool-part's own start/end timestamps —
-    // ToolStateCompleted schema guarantees both fields are populated
-    // when status="completed" (message-v2.ts:309-313). This is reliable
-    // and synchronous — no dependency on the child session's message
-    // stream syncing back, which previously caused "N toolcalls · 0ms"
-    // to render for completed tasks whose child session's final
-    // assistant message.time.completed hadn't synced yet.
     const st = props.part.state
-    if (st.status === "completed" && st.time?.start != null && st.time?.end != null) {
-      return st.time.end - st.time.start
+    if (childActive() && st.time?.start != null) {
+      return now() - st.time.start
     }
-    // Running: compute elapsed against the Task tool-part's start
-    // timestamp (ToolStateRunning guarantees time.start at
-    // message-v2.ts:295-297). Re-evaluates every tick via now(), so
-    // the user sees "3s", "4s", "5s"… advance while the subagent
-    // works.
+    if (st.status === "completed" && st.time?.start != null) {
+      // Prefer child's actual completion over the premature time.end stamped
+      // when a background task's execute() returned at dispatch.
+      const childEnd = messages().findLast((x) => x.role === "assistant")?.time?.completed
+      if (childEnd != null && childEnd > st.time.start) {
+        return childEnd - st.time.start
+      }
+      if (st.time?.end != null) return st.time.end - st.time.start
+    }
     if (st.status === "running" && st.time?.start != null) {
       return now() - st.time.start
     }
-    // Fallback: derive from the child session's own message stream for
-    // states where the Task tool-part doesn't carry timestamps (rare).
     const first = messages().find((x) => x.role === "user")?.time.created
     const assistant = messages().findLast((x) => x.role === "assistant")?.time.completed
     if (!first || !assistant) return 0
@@ -2070,7 +2088,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
       }
     }
 
-    if (props.part.state.status === "completed") {
+    if (props.part.state.status === "completed" && !isRunning()) {
       content.push(`└ ${tools().length} toolcalls · ${Locale.duration(duration())}`)
     }
 

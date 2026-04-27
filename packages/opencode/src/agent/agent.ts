@@ -45,6 +45,8 @@ export const Info = z
     prompt: z.string().optional(),
     options: z.record(z.string(), z.any()),
     steps: z.number().int().positive().optional(),
+    omit_project_context: z.boolean().optional(),
+    forks_parent_context: z.union([z.boolean(), z.literal("turn")]).optional(),
   })
   .meta({
     ref: "Agent",
@@ -143,6 +145,7 @@ export const layer = Layer.effect(
             ),
             mode: "primary",
             native: true,
+            omit_project_context: true,
           },
           general: {
             name: "general",
@@ -157,6 +160,17 @@ export const layer = Layer.effect(
             options: {},
             mode: "subagent",
             native: true,
+          },
+          fork: {
+            name: "fork",
+            description:
+              "Implicit fork — inherits full conversation context. Not selectable via subagent_type; triggered by omitting subagent_type when fork mode is active.",
+            permission: Permission.merge(defaults, user),
+            options: {},
+            mode: "subagent",
+            native: true,
+            hidden: true,
+            forks_parent_context: true,
           },
           explore: {
             name: "explore",
@@ -260,6 +274,8 @@ export const layer = Layer.effect(
           item.steps = value.steps ?? item.steps
           item.options = mergeDeep(item.options, value.options ?? {})
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
+          if (value.omit_project_context !== undefined) item.omit_project_context = value.omit_project_context
+          if (value.forks_parent_context !== undefined) item.forks_parent_context = value.forks_parent_context
         }
 
         // Ensure Truncate.GLOB is allowed unless explicitly configured
@@ -279,7 +295,13 @@ export const layer = Layer.effect(
         }
 
         const get = Effect.fnUntraced(function* (agent: string) {
-          return agents[agent]
+          const direct = agents[agent]
+          if (direct) return direct
+          const lower = agent.toLowerCase()
+          for (const candidate of Object.values(agents)) {
+            if (candidate.name.toLowerCase() === lower) return candidate
+          }
+          return undefined as unknown as Info
         })
 
         const list = Effect.fnUntraced(function* () {

@@ -22,6 +22,7 @@ import { WriteTool } from "../../tool/write"
 import { CodeSearchTool } from "../../tool/codesearch"
 import { WebSearchTool } from "../../tool/websearch"
 import { TaskTool } from "../../tool/task"
+import { isTaskToolName } from "../../tool/task-name"
 import { SkillTool } from "../../tool/skill"
 import { BashTool } from "../../tool/bash"
 import { TodoWriteTool } from "../../tool/todo"
@@ -163,7 +164,11 @@ function task(info: ToolProps<typeof TaskTool>) {
   const input = info.part.state.input
   const status = info.part.state.status
   const subagent =
-    typeof input.subagent_type === "string" && input.subagent_type.trim().length > 0 ? input.subagent_type : "unknown"
+    typeof input.subagent_type === "string" && input.subagent_type.trim().length > 0
+      ? input.subagent_type
+      : typeof input.category === "string" && input.category.trim().length > 0
+        ? input.category
+        : "unknown"
   const agent = Locale.titlecase(subagent)
   const desc =
     typeof input.description === "string" && input.description.trim().length > 0 ? input.description : undefined
@@ -417,7 +422,7 @@ export const RunCommand = cmd({
           if (part.tool === "edit") return edit(props<typeof EditTool>(part))
           if (part.tool === "codesearch") return codesearch(props<typeof CodeSearchTool>(part))
           if (part.tool === "websearch") return websearch(props<typeof WebSearchTool>(part))
-          if (part.tool === "task") return task(props<typeof TaskTool>(part))
+          if (isTaskToolName(part.tool)) return task(props<typeof TaskTool>(part))
           if (part.tool === "todowrite") return todo(props<typeof TodoWriteTool>(part))
           if (part.tool === "skill") return skill(props<typeof SkillTool>(part))
           return fallback(part)
@@ -472,7 +477,7 @@ export const RunCommand = cmd({
 
             if (
               part.type === "tool" &&
-              part.tool === "task" &&
+              isTaskToolName(part.tool) &&
               part.state.status === "running" &&
               args.format !== "json"
             ) {

@@ -14,6 +14,7 @@ import { Deferred, Effect, Layer, Schema, Context } from "effect"
 import os from "os"
 import { evaluate as evalRule } from "./evaluate"
 import { PermissionID } from "./schema"
+import { normalizeTaskPermissionKey } from "@/tool/task-name"
 
 const log = Log.create({ service: "permission" })
 
@@ -144,8 +145,9 @@ interface State {
 }
 
 export function evaluate(permission: string, pattern: string, ...rulesets: Ruleset[]): Rule {
-  log.info("evaluate", { permission, pattern, ruleset: rulesets.flat() })
-  return evalRule(permission, pattern, ...rulesets)
+  const normalized = normalizeTaskPermissionKey(permission)
+  log.info("evaluate", { permission: normalized, pattern, ruleset: rulesets.flat() })
+  return evalRule(normalized, pattern, ...rulesets)
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Permission") {}

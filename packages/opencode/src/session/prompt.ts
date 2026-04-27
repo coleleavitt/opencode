@@ -16,6 +16,8 @@ import { Bus } from "../bus"
 import { ProviderTransform } from "../provider"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
+import { ForkContext } from "./fork-context"
+import { PendingTaskNotifications } from "../task-background/pending-notifications"
 import { Plugin } from "../plugin"
 import PROMPT_PLAN from "../session/prompt/plan.txt"
 import BUILD_SWITCH from "../session/prompt/build-switch.txt"
@@ -100,6 +102,7 @@ export const layer = Layer.effect(
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
     const scope = yield* Scope.Scope
     const instruction = yield* Instruction.Service
+    const pendingNotifications = yield* PendingTaskNotifications.Service
     const state = yield* SessionRunState.Service
     const revert = yield* SessionRevert.Service
     const summary = yield* SessionSummary.Service
@@ -116,6 +119,8 @@ export const layer = Layer.effect(
         prompt: (input: PromptInput) => prompt(input),
       } satisfies TaskPromptOps
     })
+
+    const forkContextStore = new Map<SessionID, MessageV2.WithParts[]>()
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* elog.info("cancel", { sessionID })
@@ -1233,6 +1238,18 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         Effect.map((x) => x.flat().map(assign)),
       )
 
+      const pendingNotes = yield* pendingNotifications.drain(input.sessionID)
+      for (const note of pendingNotes) {
+        const partID = PartID.ascending()
+        const fullPart: MessageV2.BackgroundTaskNotificationPart = {
+          ...note,
+          id: partID,
+          messageID: info.id,
+          sessionID: input.sessionID,
+        }
+        parts.push(assign(fullPart) as unknown as (typeof parts)[number])
+      }
+
       yield* plugin.trigger(
         "chat.message",
         {
@@ -1282,6 +1299,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         const message = yield* createUserMessage(input)
         yield* sessions.touch(input.sessionID)
 
+        if (input.forkContextMessages && input.forkContextMessages.length > 0) {
+          forkContextStore.set(input.sessionID, input.forkContextMessages)
+        }
+
         const permissions: Permission.Ruleset = []
         for (const [t, enabled] of Object.entries(input.tools ?? {})) {
           permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
@@ -1292,7 +1313,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         }
 
         if (input.noReply === true) return message
-        return yield* loop({ sessionID: input.sessionID })
+        return yield* loop({ sessionID: input.sessionID }).pipe(
+          Effect.ensuring(Effect.sync(() => forkContextStore.delete(input.sessionID))),
+        )
       },
     )
 
@@ -1472,11 +1495,16 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
+            const forkCtx = forkContextStore.get(sessionID)
+            const forkBudget = ForkContext.DEFAULT_FORK_CONTEXT_BUDGET_TOKENS
+            const forkPrefix =
+              forkCtx && forkCtx.length > 0 ? ForkContext.truncateForBudget(forkCtx, forkBudget).messages : []
+
             const [skills, env, instructions, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               Effect.sync(() => sys.environment(model)),
-              instruction.system().pipe(Effect.orDie),
-              MessageV2.toModelMessagesEffect(msgs, model),
+              agent.omit_project_context ? Effect.succeed([] as string[]) : instruction.system().pipe(Effect.orDie),
+              MessageV2.toModelMessagesEffect([...forkPrefix, ...msgs], model),
             ])
             const system = [...env, ...(skills ? [skills] : []), ...instructions]
             const format = lastUser.format ?? { type: "text" as const }
@@ -1687,6 +1715,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Truncate.defaultLayer),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(Instruction.defaultLayer),
+    Layer.provide(PendingTaskNotifications.defaultLayer),
     Layer.provide(AppFileSystem.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(Session.defaultLayer),
@@ -1741,6 +1770,7 @@ type PartInputUnion =
   | MessageV2.SubtaskPartInput
 export type PromptInput = Omit<Schema.Schema.Type<typeof PromptInput>, "parts"> & {
   parts: PartInputUnion[]
+  forkContextMessages?: MessageV2.WithParts[]
 }
 
 export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput")({

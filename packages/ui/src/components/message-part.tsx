@@ -363,10 +363,13 @@ export function getToolInfo(tool: string, input: any = {}): ToolInfo {
         subtitle: input.query,
       }
     case "task": {
-      const type =
+      const rawAgent =
         typeof input.subagent_type === "string" && input.subagent_type
-          ? input.subagent_type[0]!.toUpperCase() + input.subagent_type.slice(1)
-          : undefined
+          ? input.subagent_type
+          : typeof input.category === "string" && input.category
+            ? input.category
+            : undefined
+      const type = rawAgent ? rawAgent[0]!.toUpperCase() + rawAgent.slice(1) : undefined
       return {
         icon: "task",
         title: agentTitle(i18n, type),
@@ -1747,7 +1750,7 @@ ToolRegistry.register({
       if (typeof value === "string" && value) return value
       return taskSession(props.input, location.pathname, data.store.session, data.store.agent)
     })
-    const agent = createMemo(() => taskAgent(props.input.subagent_type, data.store.agent))
+    const agent = createMemo(() => taskAgent(props.input.subagent_type ?? props.input.category, data.store.agent))
     const title = createMemo(() => agent().name ?? i18n.t("ui.tool.agent.default"))
     const tone = createMemo(() => agent().color)
     const subtitle = createMemo(() => {

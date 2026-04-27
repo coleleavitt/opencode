@@ -45,6 +45,11 @@ import { Bus } from "../bus"
 import { Agent } from "../agent/agent"
 import { Skill } from "../skill"
 import { Permission } from "@/permission"
+import { isTaskToolName } from "./task-name"
+import { TaskBackgroundRegistry } from "../task-background/registry"
+import { PendingTaskNotifications } from "../task-background/pending-notifications"
+import { TaskStatusTool } from "./task-status"
+import { TaskCancelTool } from "./task-cancel"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -87,6 +92,8 @@ export const layer: Layer.Layer<
   | Ripgrep.Service
   | Format.Service
   | Truncate.Service
+  | TaskBackgroundRegistry.Service
+  | PendingTaskNotifications.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -113,6 +120,8 @@ export const layer: Layer.Layer<
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
+    const taskstatus = yield* TaskStatusTool
+    const taskcancel = yield* TaskCancelTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -124,6 +133,7 @@ export const layer: Layer.Layer<
             id,
             parameters: z.object(def.args),
             description: def.description,
+            aliases: def.aliases,
             execute: (args, toolCtx) =>
               Effect.gen(function* () {
                 const pluginCtx: PluginToolContext = {
@@ -185,6 +195,8 @@ export const layer: Layer.Layer<
           edit: Tool.init(edit),
           write: Tool.init(writetool),
           task: Tool.init(task),
+          taskstatus: Tool.init(taskstatus),
+          taskcancel: Tool.init(taskcancel),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
           search: Tool.init(websearch),
@@ -208,6 +220,7 @@ export const layer: Layer.Layer<
             tool.edit,
             tool.write,
             tool.task,
+            ...(Flag.OPENCODE_DISABLE_BACKGROUND_TASKS ? [] : [tool.taskstatus, tool.taskcancel]),
             tool.fetch,
             tool.todo,
             tool.search,
@@ -280,7 +293,7 @@ export const layer: Layer.Layer<
         return true
       })
 
-      return yield* Effect.forEach(
+      const enriched = yield* Effect.forEach(
         filtered,
         Effect.fnUntraced(function* (tool: Tool.Def) {
           using _ = log.time(tool.id)
@@ -293,7 +306,7 @@ export const layer: Layer.Layer<
             id: tool.id,
             description: [
               output.description,
-              tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined,
+              isTaskToolName(tool.id) ? yield* describeTask(input.agent) : undefined,
               tool.id === SkillTool.id ? yield* describeSkill(input.agent) : undefined,
             ]
               .filter(Boolean)
@@ -301,10 +314,17 @@ export const layer: Layer.Layer<
             parameters: output.parameters,
             execute: tool.execute,
             formatValidationError: tool.formatValidationError,
-          }
+            aliases: tool.aliases,
+          } satisfies Tool.Def
         }),
         { concurrency: "unbounded" },
       )
+
+      return enriched.flatMap((tool) => {
+        if (!tool.aliases || tool.aliases.length === 0) return [tool]
+        const aliasEntries = tool.aliases.map((alias) => ({ ...tool, id: alias, aliases: undefined }))
+        return [tool, ...aliasEntries]
+      })
     })
 
     const named: Interface["named"] = Effect.fn("ToolRegistry.named")(function* () {
@@ -335,5 +355,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(Ripgrep.defaultLayer),
     Layer.provide(Truncate.defaultLayer),
+    Layer.provide(TaskBackgroundRegistry.defaultLayer),
+    Layer.provide(PendingTaskNotifications.defaultLayer),
   ),
 )

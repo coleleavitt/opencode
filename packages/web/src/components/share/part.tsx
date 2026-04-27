@@ -701,11 +701,24 @@ function ToolFooter(props: { time: number }) {
 
 function TaskTool(props: ToolProps) {
   const messages = useShareMessages()
+  const agent = createMemo(() => {
+    const input = props.state.input as { subagent_type?: unknown; category?: unknown }
+    const subagent =
+      typeof input.subagent_type === "string" && input.subagent_type.trim() ? input.subagent_type.trim() : undefined
+    if (subagent) return subagent
+    const category = typeof input.category === "string" && input.category.trim() ? input.category.trim() : undefined
+    return category
+  })
+  const name = createMemo(() => {
+    const value = agent()
+    if (!value) return "Task"
+    return `${value[0]!.toUpperCase()}${value.slice(1)} Task`
+  })
 
   return (
     <>
       <div data-component="tool-title">
-        <span data-slot="name">Task</span>
+        <span data-slot="name">{name()}</span>
         <span data-slot="target">{props.state.input.description}</span>
       </div>
       <div data-component="tool-input">&ldquo;{props.state.input.prompt}&rdquo;</div>

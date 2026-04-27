@@ -239,6 +239,18 @@ export const Info = Schema.Struct({
       }),
     }),
   ),
+  task: Schema.optional(
+    Schema.Struct({
+      max_fork_context_tokens: Schema.optional(PositiveInt).annotate({
+        description:
+          "Token budget for messages prepended into a fork subagent's context. Forwarded parent messages are truncated from the oldest end with a marker when exceeded. Default 100000.",
+      }),
+      max_concurrent_background: Schema.optional(PositiveInt).annotate({
+        description:
+          "Maximum number of concurrent background task fibers per project instance. Attempts to launch beyond this cap fail fast with BackgroundTaskCapacityError. Default 8.",
+      }),
+    }),
+  ),
 })
   .annotate({ identifier: "Config" })
   .pipe(

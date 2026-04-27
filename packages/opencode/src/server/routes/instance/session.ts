@@ -30,6 +30,33 @@ import { jsonRequest, runRequest } from "./trace"
 
 const log = Log.create({ service: "server" })
 
+interface ErrorSummary {
+  message: string
+  stack?: string
+}
+
+function describeError(err: unknown): ErrorSummary {
+  if (err instanceof Error) {
+    const ctor = err.constructor?.name && err.constructor.name !== "Error" ? `[${err.constructor.name}] ` : ""
+    const base = err.message ? `${ctor}${err.message}` : `${ctor}(no message)`
+    const cause =
+      err.cause instanceof Error
+        ? ` Caused by: ${describeError(err.cause).message}`
+        : err.cause !== undefined
+          ? ` Caused by: ${String(err.cause)}`
+          : ""
+    return { message: base + cause, stack: err.stack }
+  }
+  if (err && typeof err === "object") {
+    try {
+      return { message: JSON.stringify(err) }
+    } catch {
+      return { message: String(err) }
+    }
+  }
+  return { message: String(err) }
+}
+
 export const SessionRoutes = lazy(() =>
   new Hono()
     .get(
@@ -917,10 +944,11 @@ export const SessionRoutes = lazy(() =>
             svc.prompt({ ...body, sessionID } as unknown as SessionPrompt.PromptInput),
           ),
         ).catch((err) => {
-          log.error("prompt_async failed", { sessionID, error: err })
+          const summary = describeError(err)
+          log.error("prompt_async failed", { sessionID, error: err, stack: summary.stack })
           void Bus.publish(Session.Event.Error, {
             sessionID,
-            error: new NamedError.Unknown({ message: err instanceof Error ? err.message : String(err) }).toObject(),
+            error: new NamedError.Unknown({ message: summary.message }).toObject(),
           })
         })
 

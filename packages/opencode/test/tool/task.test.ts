@@ -1,5 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Cause, Effect, Layer } from "effect"
 import { Agent } from "../../src/agent/agent"
 import { Config } from "../../src/config"
 import * as CrossSpawnSpawner from "../../src/effect/cross-spawn-spawner"
@@ -8,8 +8,17 @@ import { Session } from "../../src/session"
 import { MessageV2 } from "../../src/session/message-v2"
 import type { SessionPrompt } from "../../src/session/prompt"
 import { MessageID, PartID } from "../../src/session/schema"
+import { Provider } from "../../src/provider"
 import { ModelID, ProviderID } from "../../src/provider/schema"
-import { TaskTool, type TaskPromptOps } from "../../src/tool/task"
+import { TaskBackgroundRegistry } from "../../src/task-background/registry"
+import { PendingTaskNotifications } from "../../src/task-background/pending-notifications"
+import {
+  RecursiveForkError,
+  TaskNotAssistantMessageError,
+  TaskTool,
+  UnknownAgentError,
+  type TaskPromptOps,
+} from "../../src/tool/task"
 import { Truncate } from "../../src/tool"
 import { ToolRegistry } from "../../src/tool"
 import { provideTmpdirInstance } from "../fixture/fixture"
@@ -29,7 +38,10 @@ const it = testEffect(
     Agent.defaultLayer,
     Config.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
+    PendingTaskNotifications.defaultLayer,
+    Provider.defaultLayer,
     Session.defaultLayer,
+    TaskBackgroundRegistry.defaultLayer,
     Truncate.defaultLayer,
     ToolRegistry.defaultLayer,
   ),
@@ -309,6 +321,398 @@ describe("tool.task", () => {
         expect(result.metadata.sessionId).not.toBe("ses_missing")
         expect(result.output).toContain(`task_id: ${result.metadata.sessionId}`)
         expect(seen?.sessionID).toBe(result.metadata.sessionId)
+      }),
+    ),
+  )
+
+  it.live("execute fork forwards parent messages via forkContextMessages (full history)", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+        const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+        const fakeParentMessages = [
+          { info: { id: MessageID.ascending(), role: "user", sessionID: chat.id }, parts: [] },
+          { info: { id: MessageID.ascending(), role: "assistant", sessionID: chat.id }, parts: [] },
+          { info: { id: MessageID.ascending(), role: "user", sessionID: chat.id }, parts: [] },
+        ] as unknown as MessageV2.WithParts[]
+
+        yield* def.execute(
+          {
+            description: "fork w/ context",
+            prompt: "do thing",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: fakeParentMessages,
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(seen?.agent).toBe("fork")
+        expect(seen?.forkContextMessages?.length).toBe(3)
+      }),
+    ),
+  )
+
+  it.live("execute respects forks_parent_context: turn agent setting", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const { chat, assistant } = yield* seed()
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          let seen: SessionPrompt.PromptInput | undefined
+          const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+          const fakeParentMessages = [
+            { info: { id: MessageID.ascending(), role: "user", sessionID: chat.id }, parts: [] },
+            { info: { id: MessageID.ascending(), role: "assistant", sessionID: chat.id }, parts: [] },
+            { info: { id: MessageID.ascending(), role: "user", sessionID: chat.id }, parts: [] },
+            { info: { id: MessageID.ascending(), role: "assistant", sessionID: chat.id }, parts: [] },
+          ] as unknown as MessageV2.WithParts[]
+
+          yield* def.execute(
+            {
+              description: "turn-only fork",
+              prompt: "do thing",
+              subagent_type: "turnforker",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: fakeParentMessages,
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+
+          expect(seen?.agent).toBe("turnforker")
+          expect(seen?.forkContextMessages?.length).toBe(2)
+        }),
+      {
+        config: {
+          agent: {
+            turnforker: {
+              mode: "subagent",
+              forks_parent_context: "turn",
+            },
+          },
+        },
+      },
+    ),
+  )
+
+  it.live("execute spawns fork agent when subagent_type is omitted", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+        const promptOps = stubOps({ text: "forked", onPrompt: (input) => (seen = input) })
+
+        yield* def.execute(
+          {
+            description: "fork case",
+            prompt: "look into the cache key path",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(seen?.agent).toBe("fork")
+        const child = yield* sessions.get(seen!.sessionID)
+        expect(child.parentID).toBe(chat.id)
+      }),
+    ),
+  )
+
+  it.live("execute spawns fork agent when subagent_type is empty/whitespace", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+        const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+        yield* def.execute(
+          {
+            description: "fork case",
+            prompt: "look into the cache key path",
+            subagent_type: "   ",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(seen?.agent).toBe("fork")
+      }),
+    ),
+  )
+
+  it.live("execute fails with RecursiveForkError when called from inside a fork", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const promptOps = stubOps()
+
+        const result = yield* Effect.exit(
+          def.execute(
+            {
+              description: "recursive fork",
+              prompt: "look into the cache key path",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "fork",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          ),
+        )
+
+        expect(result._tag).toBe("Failure")
+        if (result._tag !== "Failure") return
+        const defect = Cause.squash(result.cause)
+        expect(defect).toBeInstanceOf(RecursiveForkError)
+        if (!(defect instanceof RecursiveForkError)) return
+        expect(defect.parentAgent).toBe("fork")
+        expect(defect.message).toContain("Fork is not available")
+      }),
+    ),
+  )
+
+  it.live("execute with explicit subagent_type still works (regression)", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+        const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+        yield* def.execute(
+          {
+            description: "explicit",
+            prompt: "do thing",
+            subagent_type: "general",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(seen?.agent).toBe("general")
+      }),
+    ),
+  )
+
+  it.live("execute fails with UnknownAgentError listing available agents when subagent_type is invalid", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const promptOps = stubOps()
+
+        const result = yield* Effect.exit(
+          def.execute(
+            {
+              description: "inspect bug",
+              prompt: "look into the cache key path",
+              subagent_type: "no-such-agent",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          ),
+        )
+
+        expect(result._tag).toBe("Failure")
+        if (result._tag !== "Failure") return
+        const defect = Cause.squash(result.cause)
+        expect(defect).toBeInstanceOf(UnknownAgentError)
+        if (!(defect instanceof UnknownAgentError)) return
+        expect(defect.requested).toBe("no-such-agent")
+        expect(defect.available).toContain("build")
+        expect(defect.available).toContain("general")
+        expect(defect.message).toContain('"no-such-agent"')
+        expect(defect.message).toContain("Available agents")
+      }),
+    ),
+  )
+
+  it.live("execute schema accepts optional model override and is forwarded to ops.prompt", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+        const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+        const parsed = def.parameters.safeParse({
+          description: "x",
+          prompt: "y",
+          subagent_type: "general",
+          model: "anthropic/claude-3-5",
+        })
+        expect(parsed.success).toBe(true)
+
+        const result = yield* Effect.exit(
+          def.execute(
+            {
+              description: "with model override",
+              prompt: "do thing",
+              subagent_type: "general",
+              model: "definitely-not-a-real-provider/x",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          ),
+        )
+
+        expect(result._tag).toBe("Failure")
+        expect(seen).toBeUndefined()
+      }),
+    ),
+  )
+
+  it.live("execute without model override falls back to agent / parent model (existing behavior)", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+        const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+        yield* def.execute(
+          {
+            description: "no override",
+            prompt: "do thing",
+            subagent_type: "general",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(seen?.model?.providerID).toBe(ref.providerID)
+        expect(seen?.model?.modelID).toBe(ref.modelID)
+      }),
+    ),
+  )
+
+  it.live("execute fails with TaskNotAssistantMessageError when invoked from a non-assistant message", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const session = yield* Session.Service
+        const chat = yield* session.create({ title: "Pinned" })
+        const user = yield* session.updateMessage({
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          time: { created: Date.now() },
+        })
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const promptOps = stubOps()
+
+        const result = yield* Effect.exit(
+          def.execute(
+            {
+              description: "inspect bug",
+              prompt: "look into the cache key path",
+              subagent_type: "general",
+            },
+            {
+              sessionID: chat.id,
+              messageID: user.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          ),
+        )
+
+        expect(result._tag).toBe("Failure")
+        if (result._tag !== "Failure") return
+        const defect = Cause.squash(result.cause)
+        expect(defect).toBeInstanceOf(TaskNotAssistantMessageError)
+        if (!(defect instanceof TaskNotAssistantMessageError)) return
+        expect(defect.role).toBe("user")
+        expect(defect.message).toContain('"user"')
       }),
     ),
   )

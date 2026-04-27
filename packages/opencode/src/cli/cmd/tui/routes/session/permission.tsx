@@ -15,6 +15,7 @@ import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
 import { Keybind } from "@/util"
 import { Locale } from "@/util"
 import { Global } from "@/global"
+import { isTaskToolName } from "@/tool/task-name"
 import { useDialog } from "../../ui/dialog"
 import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../context/tui-config"
@@ -304,8 +305,13 @@ export function PermissionPrompt(props: { request: PermissionRequest }) {
               }
             }
 
-            if (permission === "task") {
-              const type = typeof data.subagent_type === "string" ? data.subagent_type : "Unknown"
+            if (isTaskToolName(permission)) {
+              const type =
+                typeof data.subagent_type === "string" && data.subagent_type.trim()
+                  ? data.subagent_type
+                  : typeof data.category === "string" && data.category.trim()
+                    ? data.category
+                    : "Unknown"
               const desc = typeof data.description === "string" ? data.description : ""
               return {
                 icon: "#",

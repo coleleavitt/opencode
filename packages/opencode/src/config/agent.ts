@@ -48,6 +48,14 @@ const AgentSchema = Schema.StructWithRest(
     }),
     maxSteps: Schema.optional(PositiveInt).annotate({ description: "@deprecated Use 'steps' field instead." }),
     permission: Schema.optional(ConfigPermission.Info),
+    omit_project_context: Schema.optional(Schema.Boolean).annotate({
+      description:
+        "Skip injecting project instruction files (AGENTS.md / CLAUDE.md / configured instructions) into this agent's system prompt. Mirrors cc119's omitClaudeMd. Defaults to false; the built-in plan agent overrides this to true.",
+    }),
+    forks_parent_context: Schema.optional(Schema.Union([Schema.Boolean, Schema.Literal("turn")])).annotate({
+      description:
+        "When true, the agent inherits the parent's full conversation history when invoked via fork mode (subagent_type omitted). When 'turn', inherits only messages since the latest user turn. When false/omitted, the agent starts with no parent history.",
+    }),
   }),
   [Schema.Record(Schema.String, Schema.Any)],
 )
@@ -69,6 +77,8 @@ const KNOWN_KEYS = new Set([
   "permission",
   "disable",
   "tools",
+  "omit_project_context",
+  "forks_parent_context",
 ])
 
 // Post-parse normalisation:

@@ -94,10 +94,42 @@ async function cleanup(dir: string) {
 }
 
 function formatError(error: Error, depth = 0): string {
-  const result = error.message
-  return error.cause instanceof Error && depth < 10
-    ? result + " Caused by: " + formatError(error.cause, depth + 1)
-    : result
+  const ctor = error.constructor?.name
+  const tag = ctor && ctor !== "Error" ? `[${ctor}] ` : ""
+  const message = error.message ?? ""
+  const data = formatErrorData(error)
+  const head = `${tag}${message || "(no message)"}${data}`
+  if (error.cause instanceof Error && depth < 10) {
+    return head + " Caused by: " + formatError(error.cause, depth + 1)
+  }
+  return head
+}
+
+const formatErrorDataSkipKeys = new Set(["name", "message", "stack", "cause", "_tag"])
+
+function formatErrorData(error: unknown): string {
+  if (!error || typeof error !== "object") return ""
+  const wrapped = (error as { data?: unknown }).data
+  const payload = wrapped && typeof wrapped === "object" ? wrapped : pickOwnFields(error)
+  if (!payload) return ""
+  try {
+    const json = JSON.stringify(payload)
+    if (!json || json === "{}") return ""
+    return ` data=${json}`
+  } catch {
+    return ""
+  }
+}
+
+function pickOwnFields(error: object): Record<string, unknown> | undefined {
+  const out: Record<string, unknown> = {}
+  let hit = false
+  for (const key of Object.keys(error)) {
+    if (formatErrorDataSkipKeys.has(key)) continue
+    out[key] = (error as Record<string, unknown>)[key]
+    hit = true
+  }
+  return hit ? out : undefined
 }
 
 let last = Date.now()
