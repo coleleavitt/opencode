@@ -252,6 +252,38 @@ export type BackgroundTaskNotificationPart = Types.DeepMutable<
   Schema.Schema.Type<typeof BackgroundTaskNotificationPart>
 >
 
+export const TaskProgressPart = Schema.Struct({
+  ...partBase,
+  type: Schema.Literal("task_progress"),
+  task_id: Schema.String,
+  description: Schema.String,
+  last_tool_name: Schema.optional(Schema.String),
+  summary: Schema.optional(Schema.String),
+  time: Schema.Struct({
+    start: Schema.Number,
+    elapsed_ms: Schema.Number,
+  }),
+})
+  .annotate({ identifier: "TaskProgressPart" })
+  .pipe(withStatics((s) => ({ zod: zod(s) })))
+export type TaskProgressPart = Types.DeepMutable<Schema.Schema.Type<typeof TaskProgressPart>>
+
+export const TaskUpdatedPart = Schema.Struct({
+  ...partBase,
+  type: Schema.Literal("task_updated"),
+  task_id: Schema.String,
+  patch: Schema.Struct({
+    status: Schema.optional(Schema.Literals(["running", "completed", "failed", "killed"])),
+    description: Schema.optional(Schema.String),
+    end_time: Schema.optional(Schema.Number),
+    error: Schema.optional(Schema.String),
+    is_backgrounded: Schema.optional(Schema.Boolean),
+  }),
+})
+  .annotate({ identifier: "TaskUpdatedPart" })
+  .pipe(withStatics((s) => ({ zod: zod(s) })))
+export type TaskUpdatedPart = Types.DeepMutable<Schema.Schema.Type<typeof TaskUpdatedPart>>
+
 export const RetryPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("retry"),
@@ -430,6 +462,8 @@ const _Part = Schema.Union([
   RetryPart,
   CompactionPart,
   BackgroundTaskNotificationPart,
+  TaskProgressPart,
+  TaskUpdatedPart,
 ]).annotate({ discriminator: "type", identifier: "Part" })
 export const Part = Object.assign(_Part, {
   zod: zod(_Part) as unknown as z.ZodType<
@@ -446,6 +480,8 @@ export const Part = Object.assign(_Part, {
     | RetryPart
     | CompactionPart
     | BackgroundTaskNotificationPart
+    | TaskProgressPart
+    | TaskUpdatedPart
   >,
 })
 export type Part =
@@ -462,6 +498,8 @@ export type Part =
   | RetryPart
   | CompactionPart
   | BackgroundTaskNotificationPart
+  | TaskProgressPart
+  | TaskUpdatedPart
 
 // Errors are still NamedError-based Zod; bridge via ZodOverride so the derived
 // Zod + JSON Schema emit the original discriminatedUnion shape. Migrating the

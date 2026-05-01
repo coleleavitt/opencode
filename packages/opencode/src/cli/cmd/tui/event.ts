@@ -66,4 +66,27 @@ export const TuiEvent = {
       error: z.string().optional(),
     }),
   ),
+  TaskProgress: BusEvent.define(
+    "tui.task.progress",
+    z.object({
+      task_id: z.string(),
+      description: z.string(),
+      last_tool_name: z.string().optional(),
+      summary: z.string().optional(),
+      elapsed_ms: z.number(),
+    }),
+  ),
+  TaskUpdated: BusEvent.define(
+    "tui.task.updated",
+    z.object({
+      task_id: z.string(),
+      patch: z.object({
+        status: z.enum(["running", "completed", "failed", "killed"]).optional(),
+        description: z.string().optional(),
+        end_time: z.number().optional(),
+        error: z.string().optional(),
+        is_backgrounded: z.boolean().optional(),
+      }),
+    }),
+  ),
 }

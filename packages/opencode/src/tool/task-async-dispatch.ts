@@ -34,6 +34,11 @@ export interface AsyncLaunchResult {
 function buildWork(input: AsyncDispatchInput) {
   const startedAt = Date.now()
   return Effect.gen(function* () {
+    void Bus.publish(TuiEvent.TaskProgress, {
+      task_id: input.taskId,
+      description: input.description,
+      elapsed_ms: 0,
+    })
     const exit = yield* Effect.exit(input.ops.prompt(input.promptInput))
     if (exit._tag === "Success") {
       const reply = exit.value
@@ -41,6 +46,10 @@ function buildWork(input: AsyncDispatchInput) {
       const text = lastText && lastText.type === "text" ? lastText.text : ""
       const summary = `Task "${input.description}" completed.`
       yield* input.registry.markCompleted(input.taskId, text)
+      void Bus.publish(TuiEvent.TaskUpdated, {
+        task_id: input.taskId,
+        patch: { status: "completed", end_time: Date.now() },
+      })
       const note: Omit<MessageV2.BackgroundTaskNotificationPart, "id" | "messageID" | "sessionID"> = {
         type: "background_task_notification",
         task_id: input.taskId,
@@ -66,6 +75,14 @@ function buildWork(input: AsyncDispatchInput) {
     const aborted = input.abort.signal.aborted
     if (aborted) yield* input.registry.markKilled(input.taskId)
     else yield* input.registry.markFailed(input.taskId, errMessage)
+    void Bus.publish(TuiEvent.TaskUpdated, {
+      task_id: input.taskId,
+      patch: {
+        status: aborted ? "killed" : "failed",
+        end_time: Date.now(),
+        error: aborted ? undefined : errMessage,
+      },
+    })
     const summary = aborted
       ? `Task "${input.description}" was cancelled.`
       : `Task "${input.description}" failed: ${errMessage}.`
