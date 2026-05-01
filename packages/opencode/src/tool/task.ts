@@ -11,6 +11,8 @@ import { Provider } from "../provider"
 import { Effect } from "effect"
 import { Flag } from "@/flag/flag"
 import { Log } from "@/util"
+import { Bus } from "@/bus"
+import { TuiEvent } from "@/cli/cmd/tui/event"
 import { lastTurn } from "../session/last-turn"
 import { TaskBackgroundRegistry } from "../task-background/registry"
 import { PendingTaskNotifications } from "../task-background/pending-notifications"
@@ -230,6 +232,13 @@ export const TaskTool = Tool.define(
           agent_name: launch.agent_name,
           parent_session_id: ctx.sessionID,
         })
+        void Bus.publish(TuiEvent.TaskStarted, {
+          task_id: launch.task_id,
+          description: params.description,
+          agent_name: next.name,
+          is_background: true,
+          parent_session_id: ctx.sessionID,
+        })
         return {
           title: params.description,
           metadata: {
@@ -254,6 +263,13 @@ export const TaskTool = Tool.define(
         }),
         () =>
           Effect.gen(function* () {
+            void Bus.publish(TuiEvent.TaskStarted, {
+              task_id: nextSession.id,
+              description: params.description,
+              agent_name: next.name,
+              is_background: false,
+              parent_session_id: ctx.sessionID,
+            })
             const parts = yield* ops.resolvePromptParts(params.prompt)
             const result = yield* ops.prompt({
               messageID,

@@ -45,4 +45,25 @@ export const TuiEvent = {
       sessionID: SessionID.zod.describe("Session ID to navigate to"),
     }),
   ),
+  TaskStarted: BusEvent.define(
+    "tui.task.started",
+    z.object({
+      task_id: z.string(),
+      description: z.string(),
+      agent_name: z.string(),
+      is_background: z.boolean(),
+      parent_session_id: z.string(),
+    }),
+  ),
+  TaskCompleted: BusEvent.define(
+    "tui.task.completed",
+    z.object({
+      task_id: z.string(),
+      description: z.string(),
+      agent_name: z.string(),
+      status: z.enum(["completed", "failed", "killed"]),
+      duration_ms: z.number().optional(),
+      error: z.string().optional(),
+    }),
+  ),
 }

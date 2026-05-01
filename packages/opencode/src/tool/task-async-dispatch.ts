@@ -1,5 +1,7 @@
 import { Cause, Effect } from "effect"
 import { Log } from "@/util"
+import { Bus } from "@/bus"
+import { TuiEvent } from "@/cli/cmd/tui/event"
 import type { SessionID } from "../session/schema"
 import type { MessageV2 } from "../session/message-v2"
 import type { SessionPrompt } from "../session/prompt"
@@ -49,6 +51,13 @@ function buildWork(input: AsyncDispatchInput) {
         time: { start: startedAt, end: Date.now() },
       }
       yield* input.pending.enqueue(input.parentSessionID, note)
+      void Bus.publish(TuiEvent.TaskCompleted, {
+        task_id: input.taskId,
+        description: input.description,
+        agent_name: input.agentName,
+        status: "completed",
+        duration_ms: Date.now() - startedAt,
+      })
       log.info("async task completed", { taskId: input.taskId, agent: input.agentName })
       return
     }
@@ -70,6 +79,14 @@ function buildWork(input: AsyncDispatchInput) {
       time: { start: startedAt, end: Date.now() },
     }
     yield* input.pending.enqueue(input.parentSessionID, note)
+    void Bus.publish(TuiEvent.TaskCompleted, {
+      task_id: input.taskId,
+      description: input.description,
+      agent_name: input.agentName,
+      status: aborted ? "killed" : "failed",
+      duration_ms: Date.now() - startedAt,
+      error: errMessage,
+    })
     log.info("async task ended", { taskId: input.taskId, status: aborted ? "killed" : "failed", error: errMessage })
   })
 }
