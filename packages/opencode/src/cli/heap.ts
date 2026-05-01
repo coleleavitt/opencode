@@ -1,4 +1,5 @@
 import path from "path"
+import fs from "node:fs"
 import { writeHeapSnapshot } from "node:v8"
 import { Flag } from "@/flag/flag"
 import { Global } from "@/global"
@@ -7,6 +8,18 @@ import { Log } from "@/util"
 const log = Log.create({ service: "heap" })
 const MINUTE = 60_000
 const LIMIT = 2 * 1024 * 1024 * 1024
+const PAGE = 4096
+
+function rss() {
+  if (process.platform === "linux") {
+    try {
+      const stat = fs.readFileSync("/proc/self/statm", "utf8")
+      const resident = Number.parseInt(stat.split(" ")[1] ?? "0", 10)
+      if (Number.isFinite(resident) && resident > 0) return resident * PAGE
+    } catch {}
+  }
+  return process.memoryUsage().rss
+}
 
 let timer: Timer | undefined
 let lock = false
@@ -19,8 +32,8 @@ export function start() {
   const run = async () => {
     if (lock) return
 
-    const stat = process.memoryUsage()
-    if (stat.rss <= LIMIT) {
+    const r = rss()
+    if (r <= LIMIT) {
       armed = true
       return
     }
@@ -33,13 +46,15 @@ export function start() {
       `heap-${process.pid}-${new Date().toISOString().replace(/[:.]/g, "")}.heapsnapshot`,
     )
     log.warn("heap usage exceeded limit", {
-      rss: stat.rss,
-      heap: stat.heapUsed,
+      rss: r,
       file,
     })
 
     await Promise.resolve()
-      .then(() => writeHeapSnapshot(file))
+      .then(() => {
+        if (typeof Bun !== "undefined" && typeof Bun.gc === "function") Bun.gc(true)
+        return writeHeapSnapshot(file)
+      })
       .catch((err) => {
         log.error("failed to write heap snapshot", {
           error: err instanceof Error ? err.message : String(err),

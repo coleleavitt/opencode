@@ -1,7 +1,7 @@
 import { InputRenderable, RGBA, ScrollBoxRenderable, TextAttributes } from "@opentui/core"
 import { useTheme, selectedForeground } from "@tui/context/theme"
 import { entries, filter, flatMap, groupBy, pipe } from "remeda"
-import { batch, createEffect, createMemo, For, Show, type JSX, on } from "solid-js"
+import { batch, createEffect, createMemo, For, Show, onCleanup, type JSX, on } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import * as fuzzysort from "fuzzysort"
@@ -142,9 +142,11 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
 
   const selected = createMemo(() => flat()[store.selected])
 
+  let selectTimer: ReturnType<typeof setTimeout> | undefined
   createEffect(
     on([() => store.filter, () => props.current], ([filter, current]) => {
-      setTimeout(() => {
+      clearTimeout(selectTimer)
+      selectTimer = setTimeout(() => {
         if (filter.length > 0) {
           moveTo(0, true)
         } else if (current) {
@@ -156,6 +158,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
       }, 0)
     }),
   )
+  onCleanup(() => clearTimeout(selectTimer))
 
   function move(direction: number) {
     if (flat().length === 0) return

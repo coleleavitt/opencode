@@ -14,6 +14,7 @@ import { Instance } from "../project/instance"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import * as Bom from "@/util/bom"
+import { withFileLock } from "./file-lock"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
 
@@ -38,33 +39,39 @@ export const WriteTool = Tool.define(
             : path.join(Instance.directory, params.filePath)
           yield* assertExternalDirectoryEffect(ctx, filepath)
 
-          const exists = yield* fs.existsSafe(filepath)
-          const source = exists ? yield* Bom.readFile(fs, filepath) : { bom: false, text: "" }
-          const next = Bom.split(params.content)
-          const desiredBom = source.bom || next.bom
-          const contentOld = source.text
-          const contentNew = next.text
+          let exists = false
+          yield* withFileLock(
+            filepath,
+            Effect.gen(function* () {
+              exists = yield* fs.existsSafe(filepath)
+              const source = exists ? yield* Bom.readFile(fs, filepath) : { bom: false, text: "" }
+              const next = Bom.split(params.content)
+              const desiredBom = source.bom || next.bom
+              const contentOld = source.text
+              const contentNew = next.text
 
-          const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
-          yield* ctx.ask({
-            permission: "edit",
-            patterns: [path.relative(Instance.worktree, filepath)],
-            always: ["*"],
-            metadata: {
-              filepath,
-              diff,
-            },
-          })
+              const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
+              yield* ctx.ask({
+                permission: "edit",
+                patterns: [path.relative(Instance.worktree, filepath)],
+                always: ["*"],
+                metadata: {
+                  filepath,
+                  diff,
+                },
+              })
 
-          yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))
-          if (yield* format.file(filepath)) {
-            yield* Bom.syncFile(fs, filepath, desiredBom)
-          }
-          yield* bus.publish(File.Event.Edited, { file: filepath })
-          yield* bus.publish(FileWatcher.Event.Updated, {
-            file: filepath,
-            event: exists ? "change" : "add",
-          })
+              yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))
+              if (yield* format.file(filepath)) {
+                yield* Bom.syncFile(fs, filepath, desiredBom)
+              }
+              yield* bus.publish(File.Event.Edited, { file: filepath })
+              yield* bus.publish(FileWatcher.Event.Updated, {
+                file: filepath,
+                event: exists ? "change" : "add",
+              })
+            }).pipe(Effect.orDie),
+          )
 
           let output = "Wrote file successfully."
           yield* lsp.touchFile(filepath, "document")

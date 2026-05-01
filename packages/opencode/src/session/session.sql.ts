@@ -69,10 +69,12 @@ export const PartTable = sqliteTable(
     session_id: text().$type<SessionID>().notNull(),
     ...Timestamps,
     data: text({ mode: "json" }).notNull().$type<PartData>(),
+    blob_hash: text(),
   },
   (table) => [
     index("part_message_id_id_idx").on(table.message_id, table.id),
     index("part_session_idx").on(table.session_id),
+    index("part_session_time_id_idx").on(table.session_id, table.time_created, table.id),
   ],
 )
 

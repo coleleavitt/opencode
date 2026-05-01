@@ -19,6 +19,7 @@ import { Effect, Schema, Types } from "effect"
 import { zod, ZodOverride } from "@/util/effect-zod"
 import { NonNegativeInt, withStatics } from "@/util/schema"
 import { namedSchemaError } from "@/util/named-schema-error"
+import { Cas } from "@/storage/cas"
 import { EffectLogger } from "@/effect"
 
 /** Error shape thrown by Bun's fetch() when gzip/br decompression fails mid-stream */
@@ -727,13 +728,19 @@ const info = (row: typeof MessageTable.$inferSelect) =>
     sessionID: row.session_id,
   }) as Info
 
-const part = (row: typeof PartTable.$inferSelect) =>
-  ({
+const part = (row: typeof PartTable.$inferSelect) => {
+  const p = {
     ...row.data,
     id: row.id,
     sessionID: row.session_id,
     messageID: row.message_id,
-  }) as Part
+  } as Part
+  if (row.blob_hash && (p.type === "text" || p.type === "reasoning") && !p.text) {
+    const content = Cas.retrieve(row.blob_hash)
+    if (content) (p as TextPart | ReasoningPart).text = content
+  }
+  return p
+}
 
 const older = (row: Cursor) =>
   or(lt(MessageTable.time_created, row.time), and(eq(MessageTable.time_created, row.time), lt(MessageTable.id, row.id)))
@@ -1090,15 +1097,7 @@ export function parts(message_id: MessageID) {
   const rows = Database.use((db) =>
     db.select().from(PartTable).where(eq(PartTable.message_id, message_id)).orderBy(PartTable.id).all(),
   )
-  return rows.map(
-    (row) =>
-      ({
-        ...row.data,
-        id: row.id,
-        sessionID: row.session_id,
-        messageID: row.message_id,
-      }) as Part,
-  )
+  return rows.map(part)
 }
 
 export function get(input: { sessionID: SessionID; messageID: MessageID }): WithParts {

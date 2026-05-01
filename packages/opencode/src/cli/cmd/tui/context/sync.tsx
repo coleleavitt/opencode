@@ -274,13 +274,21 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const messages = store.message[event.properties.sessionID]
           const result = Binary.search(messages, event.properties.messageID, (m) => m.id)
           if (result.found) {
-            setStore(
-              "message",
-              event.properties.sessionID,
-              produce((draft) => {
-                draft.splice(result.index, 1)
-              }),
-            )
+            batch(() => {
+              setStore(
+                "message",
+                event.properties.sessionID,
+                produce((draft) => {
+                  draft.splice(result.index, 1)
+                }),
+              )
+              setStore(
+                "part",
+                produce((draft) => {
+                  delete draft[event.properties.messageID]
+                }),
+              )
+            })
           }
           break
         }
@@ -500,21 +508,32 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           if (fullSyncedSessions.has(sessionID)) return
           const [session, messages, todo, diff] = await Promise.all([
             sdk.client.session.get({ sessionID }, { throwOnError: true }),
-            sdk.client.session.messages({ sessionID, limit: 100 }),
-            sdk.client.session.todo({ sessionID }),
-            sdk.client.session.diff({ sessionID }),
+            sdk.client.session.messages({ sessionID, limit: 100 }, { throwOnError: true }),
+            sdk.client.session.todo({ sessionID }, { throwOnError: true }),
+            sdk.client.session.diff({ sessionID }, { throwOnError: true }),
           ])
+          const sessionData = session.data
+          const messagesData = messages.data ?? []
+          const todoData = todo.data ?? []
+          const diffData = diff.data ?? []
+          if (!sessionData) {
+            Log.Default.warn("session.sync: empty session data", { sessionID })
+            return
+          }
+          if (messagesData.length === 0) {
+            Log.Default.warn("session.sync: zero messages returned", { sessionID })
+          }
           setStore(
             produce((draft) => {
               const match = Binary.search(draft.session, sessionID, (s) => s.id)
-              if (match.found) draft.session[match.index] = session.data!
-              if (!match.found) draft.session.splice(match.index, 0, session.data!)
-              draft.todo[sessionID] = todo.data ?? []
-              draft.message[sessionID] = messages.data!.map((x) => x.info)
-              for (const message of messages.data!) {
+              if (match.found) draft.session[match.index] = sessionData
+              if (!match.found) draft.session.splice(match.index, 0, sessionData)
+              draft.todo[sessionID] = todoData
+              draft.message[sessionID] = messagesData.map((x) => x.info)
+              for (const message of messagesData) {
                 draft.part[message.info.id] = message.parts
               }
-              draft.session_diff[sessionID] = diff.data ?? []
+              draft.session_diff[sessionID] = diffData
             }),
           )
           fullSyncedSessions.add(sessionID)

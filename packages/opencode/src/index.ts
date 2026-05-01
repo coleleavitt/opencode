@@ -67,8 +67,16 @@ for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     try {
       process.stdout.write("\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l")
     } catch {}
-    ;(process as any)._exit(code)
+    process.exit(code)
   })
+}
+
+// Ensure detached child processes are reaped. Without a SIGCHLD listener,
+// exited children of detached process groups become zombies indefinitely.
+// The empty handler is enough — Node/Bun's libuv/kqueue loop reaps the child
+// when the signal fires, preventing zombie accumulation.
+if (process.platform !== "win32") {
+  process.on("SIGCHLD", () => {})
 }
 
 process.on("unhandledRejection", (e) => {
@@ -273,13 +281,13 @@ try {
   // 1. Run global cleanup registry (2s timeout)
   // 2. Dispose all instances (2s timeout)
   // 3. Failsafe: force exit after 5s total
-  const failsafe = setTimeout(() => (process as any)._exit(process.exitCode ?? 0), 5000)
+  const failsafe = setTimeout(() => process.exit(process.exitCode ?? 0), 5000)
   failsafe.unref?.()
   try {
     await runCleanup(2000)
     await Promise.race([Instance.disposeAll(), new Promise((r) => setTimeout(r, 2000))])
   } catch {}
   clearTimeout(failsafe)
-  setTimeout(() => (process as any)._exit(process.exitCode ?? 0), 100).unref()
+  setTimeout(() => process.exit(process.exitCode ?? 0), 100).unref()
   process.exit()
 }

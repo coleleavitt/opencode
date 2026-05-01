@@ -356,6 +356,7 @@ export const layer = Layer.effect(
     const accountSvc = yield* Account.Service
     const env = yield* Env.Service
     const npmSvc = yield* Npm.Service
+    const flock = yield* EffectFlock.Service
 
     const readConfigFile = Effect.fnUntraced(function* (filepath: string) {
       return yield* fs.readFileString(filepath).pipe(
@@ -741,8 +742,13 @@ export const layer = Layer.effect(
       const dir = yield* InstanceState.directory
       const file = path.join(dir, "config.json")
       const existing = yield* loadFile(file)
-      yield* fs
-        .writeFileString(file, JSON.stringify(mergeDeep(writable(existing), writable(config)), null, 2))
+      yield* flock
+        .withLock(
+          fs.writeFileString(file, JSON.stringify(mergeDeep(writable(existing), writable(config)), null, 2)).pipe(
+            Effect.orDie,
+          ),
+          `config:${file}`,
+        )
         .pipe(Effect.orDie)
       yield* Effect.promise(() => Instance.dispose())
     })
@@ -772,12 +778,22 @@ export const layer = Layer.effect(
       if (!file.endsWith(".jsonc")) {
         const existing = ConfigParse.schema(Info.zod, ConfigParse.jsonc(before, file), file)
         const merged = mergeDeep(writable(existing), writable(config))
-        yield* fs.writeFileString(file, JSON.stringify(merged, null, 2)).pipe(Effect.orDie)
+        yield* flock
+          .withLock(
+            fs.writeFileString(file, JSON.stringify(merged, null, 2)).pipe(Effect.orDie),
+            `config:${file}`,
+          )
+          .pipe(Effect.orDie)
         next = merged
       } else {
         const updated = patchJsonc(before, writable(config))
         next = ConfigParse.schema(Info.zod, ConfigParse.jsonc(updated, file), file)
-        yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
+        yield* flock
+          .withLock(
+            fs.writeFileString(file, updated).pipe(Effect.orDie),
+            `config:${file}`,
+          )
+          .pipe(Effect.orDie)
       }
 
       yield* invalidate()

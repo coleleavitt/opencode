@@ -12,6 +12,7 @@ import {
   ErrorBoundary,
   createSignal,
   onMount,
+  onCleanup,
   batch,
   Show,
   on,
@@ -148,16 +149,7 @@ export function tui(input: {
             <ExitProvider onBeforeExit={onBeforeExit} onExit={onExit}>
               <KVProvider>
                 <ToastProvider>
-                  <RouteProvider
-                    initialRoute={
-                      input.args.continue
-                        ? {
-                            type: "session",
-                            sessionID: "dummy",
-                          }
-                        : undefined
-                    }
-                  >
+                  <RouteProvider>
                     <TuiConfigProvider config={input.config}>
                       <SDKProvider
                         url={input.url}
@@ -739,11 +731,11 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     },
   ])
 
-  event.on(TuiEvent.CommandExecute.type, (evt) => {
+  const disposeCommandExecute = event.on(TuiEvent.CommandExecute.type, (evt) => {
     command.trigger(evt.properties.command)
   })
 
-  event.on(TuiEvent.ToastShow.type, (evt) => {
+  const disposeToastShow = event.on(TuiEvent.ToastShow.type, (evt) => {
     toast.show({
       title: evt.properties.title,
       message: evt.properties.message,
@@ -752,14 +744,14 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     })
   })
 
-  event.on(TuiEvent.SessionSelect.type, (evt) => {
+  const disposeSessionSelect = event.on(TuiEvent.SessionSelect.type, (evt) => {
     route.navigate({
       type: "session",
       sessionID: evt.properties.sessionID,
     })
   })
 
-  event.on("session.deleted", (evt) => {
+  const disposeSessionDeleted = event.on("session.deleted", (evt) => {
     if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
       route.navigate({ type: "home" })
       toast.show({
@@ -769,7 +761,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     }
   })
 
-  event.on("session.error", (evt) => {
+  const disposeSessionError = event.on("session.error", (evt) => {
     const error = evt.properties.error
     if (error && typeof error === "object" && error.name === "MessageAbortedError") return
     const message = errorMessage(error)
@@ -781,7 +773,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     })
   })
 
-  event.on("installation.update-available", async (evt) => {
+  const disposeUpdateAvailable = event.on("installation.update-available", async (evt) => {
     const version = evt.properties.version
 
     const skipped = kv.get("skipped_version")
@@ -828,6 +820,15 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     void exit()
   })
 
+  onCleanup(() => {
+    disposeCommandExecute?.()
+    disposeToastShow?.()
+    disposeSessionSelect?.()
+    disposeSessionDeleted?.()
+    disposeSessionError?.()
+    disposeUpdateAvailable?.()
+  })
+
   const plugin = createMemo(() => {
     if (!ready()) return
     if (route.data.type !== "plugin") return
@@ -854,7 +855,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       <Show when={Flag.OPENCODE_SHOW_TTFD}>
         <TimeToFirstDraw />
       </Show>
-      <Show when={ready()}>
+      <Show when={ready() && (!args.continue || sync.status !== "loading")}>
         <Switch>
           <Match when={route.data.type === "home"}>
             <Home />

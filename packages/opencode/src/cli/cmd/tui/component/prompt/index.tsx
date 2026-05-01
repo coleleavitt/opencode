@@ -132,18 +132,22 @@ export function Prompt(props: PromptProps) {
   let promptPartTypeId = 0
   const event = useEvent()
 
+  let promptAppendTimer: ReturnType<typeof setTimeout> | undefined
   const disposePromptAppend = event.on(TuiEvent.PromptAppend.type, (evt) => {
     if (!input || input.isDestroyed) return
     input.insertText(evt.properties.text)
-    setTimeout(() => {
-      // setTimeout is a workaround and needs to be addressed properly
+    clearTimeout(promptAppendTimer)
+    promptAppendTimer = setTimeout(() => {
       if (!input || input.isDestroyed) return
       input.getLayoutNode().markDirty()
       input.gotoBufferEnd()
       renderer.requestRender()
     }, 0)
   })
-  onCleanup(() => disposePromptAppend?.())
+  onCleanup(() => {
+    disposePromptAppend?.()
+    clearTimeout(promptAppendTimer)
+  })
 
   createEffect(() => {
     if (props.disabled) input.cursorColor = theme.backgroundElement

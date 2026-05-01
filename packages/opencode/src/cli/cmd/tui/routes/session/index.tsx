@@ -35,7 +35,7 @@ import type {
   ReasoningPart,
 } from "@opencode-ai/sdk/v2"
 import { useLocal } from "@tui/context/local"
-import { Locale } from "@/util"
+import { Locale, Log } from "@/util"
 import type { Tool } from "@/tool"
 import { isTaskToolName } from "@/tool/task-name"
 import type { ReadTool } from "@/tool/read"
@@ -213,6 +213,11 @@ export function Session() {
       await sync.session.sync(sessionID)
       if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
+      Log.Default.error("session route sync failed", {
+        sessionID,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      })
       if (route.sessionID !== sessionID) return
       toast.show({
         message: errorMessage(error),

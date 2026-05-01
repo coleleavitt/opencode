@@ -93,6 +93,11 @@ export const Client = lazy(() => {
   db.run("PRAGMA foreign_keys = ON")
   db.run("PRAGMA wal_checkpoint(PASSIVE)")
 
+  // Blob storage optimizations
+  db.run("PRAGMA mmap_size = 134217728") // 128MB mmap for zero-copy reads
+  db.run("PRAGMA page_size = 8192") // 8KB pages (only effective on new databases)
+  db.run("PRAGMA temp_store = MEMORY") // Keep temp tables in memory
+
   // Apply schema migrations
   const entries =
     typeof OPENCODE_MIGRATIONS !== "undefined"
@@ -110,6 +115,45 @@ export const Client = lazy(() => {
     }
     migrate(db, entries)
   }
+
+  // Create FTS5 index for part text search (idempotent)
+  db.run(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS parts_fts USING fts5(
+      part_id UNINDEXED,
+      session_id UNINDEXED,
+      message_id UNINDEXED,
+      content,
+      tokenize='porter unicode61'
+    )
+  `)
+
+  // FTS5 sync triggers — keep parts_fts in sync with part table
+  // Only index parts that have a text field (TextPart, ReasoningPart)
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS parts_fts_insert AFTER INSERT ON part
+    WHEN json_extract(NEW.data, '$.text') IS NOT NULL
+    BEGIN
+      INSERT INTO parts_fts(part_id, session_id, message_id, content)
+      VALUES (NEW.id, NEW.session_id, NEW.message_id, json_extract(NEW.data, '$.text'));
+    END
+  `)
+
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS parts_fts_update AFTER UPDATE ON part
+    WHEN json_extract(NEW.data, '$.text') IS NOT NULL
+    BEGIN
+      DELETE FROM parts_fts WHERE part_id = OLD.id;
+      INSERT INTO parts_fts(part_id, session_id, message_id, content)
+      VALUES (NEW.id, NEW.session_id, NEW.message_id, json_extract(NEW.data, '$.text'));
+    END
+  `)
+
+  db.run(`
+    CREATE TRIGGER IF NOT EXISTS parts_fts_delete AFTER DELETE ON part
+    BEGIN
+      DELETE FROM parts_fts WHERE part_id = OLD.id;
+    END
+  `)
 
   return db
 })

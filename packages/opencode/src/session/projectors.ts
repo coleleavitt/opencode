@@ -4,6 +4,8 @@ import * as Session from "./session"
 import { MessageV2 } from "./message-v2"
 import { SessionTable, MessageTable, PartTable } from "./session.sql"
 import { Log } from "../util"
+import { Cas } from "@/storage/cas"
+import { isLargePart } from "@/storage/cas-constants"
 
 const log = Log.create({ service: "session.projector" })
 
@@ -117,6 +119,20 @@ export default [
   SyncEvent.project(MessageV2.Event.PartUpdated, (db, data) => {
     const { id, messageID, sessionID, ...rest } = data.part
 
+    // Externalize large text content to CAS blob store
+    // Pre-check: skip Blob allocation for strings that can't exceed 4KB threshold
+    // (UTF-8 uses at most 4 bytes per char, so <1024 chars can't exceed 4096 bytes)
+    let blobHash: string | undefined
+    const partData = data.part
+    if (
+      "text" in partData &&
+      typeof partData.text === "string" &&
+      partData.text.length > 1024 &&
+      isLargePart(partData.text)
+    ) {
+      blobHash = Cas.store(partData.text)
+    }
+
     try {
       db.insert(PartTable)
         .values({
@@ -125,8 +141,9 @@ export default [
           session_id: sessionID,
           time_created: data.time,
           data: rest,
+          blob_hash: blobHash,
         })
-        .onConflictDoUpdate({ target: PartTable.id, set: { data: rest } })
+        .onConflictDoUpdate({ target: PartTable.id, set: { data: rest, blob_hash: blobHash } })
         .run()
     } catch (err) {
       if (!foreign(err)) throw err
