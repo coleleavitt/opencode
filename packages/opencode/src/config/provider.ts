@@ -100,7 +100,7 @@ export const Info = Schema.Struct({
           Schema.Union([PositiveInt, Schema.Literal(false)]),
         ).annotate({
           description:
-            "Liveness timeout in milliseconds between streamed SSE chunks. Default is 45000 (45s) — detects dead connections when no data arrives. Set to false to disable.",
+            "Timeout in milliseconds between streamed SSE chunks. Disabled by default — TCP keepalive detects dead connections. Set to a positive integer (e.g. 120000) to enable.",
         }),
       }),
       [Schema.Record(Schema.String, Schema.Any)],

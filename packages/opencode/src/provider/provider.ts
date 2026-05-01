@@ -1441,7 +1441,7 @@ const layer: Layer.Layer<
         const customFetch = options["fetch"]
         const rawChunkTimeout = options["chunkTimeout"]
         delete options["chunkTimeout"]
-        const chunkTimeout = rawChunkTimeout === false ? 0 : (typeof rawChunkTimeout === "number" ? rawChunkTimeout : 45_000)
+        const chunkTimeout = rawChunkTimeout === false ? 0 : (typeof rawChunkTimeout === "number" ? rawChunkTimeout : 0)
 
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const fetchFn = customFetch ?? fetch
