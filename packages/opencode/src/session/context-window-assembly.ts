@@ -69,4 +69,34 @@ export function assembleContextWindow(sessionID: SessionID, k: number): MessageV
   return filtered
 }
 
+const MICROCOMPACT_KEEP = 5
+const MICROCOMPACT_PROTECTED = new Set(["skill"])
+
+/**
+ * In-memory only — clears old tool outputs before LLM serialization.
+ * Keeps the last `keepRecent` completed results per tool name.
+ * Older results get `time.compacted = -1` so toModelMessages emits
+ * "[Old tool result content cleared]" instead of the full output.
+ * DB and TUI are unaffected — assembleContextWindow loads fresh each iteration.
+ */
+export function microcompact(msgs: MessageV2.WithParts[], keepRecent = MICROCOMPACT_KEEP): MessageV2.WithParts[] {
+  const counts = new Map<string, number>()
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    for (let j = msgs[i].parts.length - 1; j >= 0; j--) {
+      const part = msgs[i].parts[j]
+      if (part.type !== "tool") continue
+      if (part.state.status !== "completed") continue
+      if (part.state.time.compacted) continue
+      if (MICROCOMPACT_PROTECTED.has(part.tool)) continue
+      const n = (counts.get(part.tool) ?? 0) + 1
+      counts.set(part.tool, n)
+      if (n <= keepRecent) continue
+      part.state.output = ""
+      part.state.time.compacted = -1
+      part.state.attachments = undefined
+    }
+  }
+  return msgs
+}
+
 export * as ContextWindowAssembly from "./context-window-assembly"
