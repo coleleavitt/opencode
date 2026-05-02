@@ -69,37 +69,66 @@ export function assembleContextWindow(sessionID: SessionID, k: number): MessageV
   return filtered
 }
 
-const MICROCOMPACT_KEEP = 5
 const MICROCOMPACT_PROTECTED = new Set(["skill"])
-const MICROCOMPACT_MIN_MESSAGES = 80
+const MICROCOMPACT_PROTECTION_BUDGET = 100_000
+const MICROCOMPACT_HYSTERESIS = 30_000
+const MICROCOMPACT_PROTECTED_TURNS = 2
 
 /**
- * In-memory only — clears old tool outputs before LLM serialization.
- * Keeps the last `keepRecent` completed results per tool name.
- * Older results get `time.compacted = -1` so toModelMessages emits
- * "[Old tool result content cleared]" instead of the full output.
- * DB and TUI are unaffected — assembleContextWindow loads fresh each iteration.
- * Skips sessions with fewer than MICROCOMPACT_MIN_MESSAGES to avoid
- * clearing tool outputs in short-lived subagent sessions.
+ * In-memory tool output pruning via token-budget backward scan.
+ * Protects last N user→assistant turns unconditionally, then fills a token
+ * budget with the most recent tool results beyond that. Everything that
+ * doesn't fit gets `time.compacted = -1` so toModelMessages emits
+ * "[Old tool result content cleared]". Hysteresis prevents thrashing.
+ * DB and TUI unaffected — assembleContextWindow loads fresh each iteration.
  */
-export function microcompact(msgs: MessageV2.WithParts[], keepRecent = MICROCOMPACT_KEEP): MessageV2.WithParts[] {
-  if (msgs.length < MICROCOMPACT_MIN_MESSAGES) return msgs
-  const counts = new Map<string, number>()
+export function microcompact(msgs: MessageV2.WithParts[]): MessageV2.WithParts[] {
+  // Phase 1: find turn protection boundary
+  let turnsFound = 0
+  let boundary = msgs.length
   for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].info.role === "user") turnsFound++
+    if (turnsFound > MICROCOMPACT_PROTECTED_TURNS) {
+      boundary = i + 1
+      break
+    }
+  }
+  if (turnsFound <= MICROCOMPACT_PROTECTED_TURNS) return msgs
+
+  // Phase 2: backward scan through unprotected region, fill token budget
+  const candidates: { msgIdx: number; partIdx: number; tokens: number }[] = []
+  let budgetUsed = 0
+  let prunableTokens = 0
+
+  for (let i = boundary - 1; i >= 0; i--) {
     for (let j = msgs[i].parts.length - 1; j >= 0; j--) {
       const part = msgs[i].parts[j]
       if (part.type !== "tool") continue
       if (part.state.status !== "completed") continue
       if (part.state.time.compacted) continue
       if (MICROCOMPACT_PROTECTED.has(part.tool)) continue
-      const n = (counts.get(part.tool) ?? 0) + 1
-      counts.set(part.tool, n)
-      if (n <= keepRecent) continue
-      part.state.output = ""
-      part.state.time.compacted = -1
-      part.state.attachments = undefined
+      const tokens = part.state.output.length / 4
+      if (budgetUsed + tokens <= MICROCOMPACT_PROTECTION_BUDGET) {
+        budgetUsed += tokens
+        continue
+      }
+      candidates.push({ msgIdx: i, partIdx: j, tokens })
+      prunableTokens += tokens
     }
   }
+
+  // Phase 3: hysteresis — don't bother unless prunable is significant
+  if (prunableTokens < MICROCOMPACT_HYSTERESIS) return msgs
+
+  // Phase 4: clear
+  for (const c of candidates) {
+    const part = msgs[c.msgIdx].parts[c.partIdx]
+    if (part.type !== "tool" || part.state.status !== "completed") continue
+    part.state.output = ""
+    part.state.time.compacted = -1
+    part.state.attachments = undefined
+  }
+
   return msgs
 }
 
