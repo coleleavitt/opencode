@@ -71,15 +71,14 @@ export function assembleContextWindow(sessionID: SessionID, k: number): MessageV
 
 const MICROCOMPACT_PROTECTED = new Set(["skill"])
 const MICROCOMPACT_PROTECTED_TURNS = 4
-const MICROCOMPACT_PROTECTION_BUDGET = 100_000
 const MICROCOMPACT_HYSTERESIS = 30_000
+// const MICROCOMPACT_PROTECTION_BUDGET = 100_000
 
 /**
- * In-memory tool output pruning via token-budget backward scan.
- * Protects last N user→assistant turns unconditionally, then fills a token
- * budget with the most recent tool results beyond that. Everything that
- * doesn't fit gets `time.compacted = -1` so toModelMessages emits
- * "[Old tool result content cleared]". Hysteresis prevents thrashing.
+ * In-memory tool output pruning. Protects last N user→assistant turns,
+ * clears tool outputs in everything older past a hysteresis threshold.
+ * Prevents Bun heap exhaustion from serializing multi-MB prompts while
+ * ensuring the model sees its recent work.
  * DB and TUI unaffected — assembleContextWindow loads fresh each iteration.
  */
 export function microcompact(msgs: MessageV2.WithParts[]): MessageV2.WithParts[] {
@@ -94,8 +93,7 @@ export function microcompact(msgs: MessageV2.WithParts[]): MessageV2.WithParts[]
   }
   if (turnsFound <= MICROCOMPACT_PROTECTED_TURNS) return msgs
 
-  const candidates: { msgIdx: number; partIdx: number; tokens: number }[] = []
-  let budgetUsed = 0
+  const toPrune: { msgIdx: number; partIdx: number }[] = []
   let prunableTokens = 0
 
   for (let i = boundary - 1; i >= 0; i--) {
@@ -105,25 +103,55 @@ export function microcompact(msgs: MessageV2.WithParts[]): MessageV2.WithParts[]
       if (part.state.status !== "completed") continue
       if (part.state.time.compacted) continue
       if (MICROCOMPACT_PROTECTED.has(part.tool)) continue
-      const tokens = part.state.output.length / 4
-      if (budgetUsed + tokens <= MICROCOMPACT_PROTECTION_BUDGET) {
-        budgetUsed += tokens
-        continue
-      }
-      candidates.push({ msgIdx: i, partIdx: j, tokens })
-      prunableTokens += tokens
+      toPrune.push({ msgIdx: i, partIdx: j })
+      prunableTokens += part.state.output.length / 4
     }
   }
 
   if (prunableTokens < MICROCOMPACT_HYSTERESIS) return msgs
 
-  for (const c of candidates) {
+  for (const c of toPrune) {
     const part = msgs[c.msgIdx].parts[c.partIdx]
     if (part.type !== "tool" || part.state.status !== "completed") continue
     part.state.output = ""
     part.state.time.compacted = -1
     part.state.attachments = undefined
   }
+
+  // Token-budget variant: instead of clearing everything outside protected
+  // turns, fill a budget backward and only clear the overflow. Uncomment
+  // when context window limits matter.
+  //
+  // const candidates: { msgIdx: number; partIdx: number; tokens: number }[] = []
+  // let budgetUsed = 0
+  // let prunableTokens = 0
+  //
+  // for (let i = boundary - 1; i >= 0; i--) {
+  //   for (let j = msgs[i].parts.length - 1; j >= 0; j--) {
+  //     const part = msgs[i].parts[j]
+  //     if (part.type !== "tool") continue
+  //     if (part.state.status !== "completed") continue
+  //     if (part.state.time.compacted) continue
+  //     if (MICROCOMPACT_PROTECTED.has(part.tool)) continue
+  //     const tokens = part.state.output.length / 4
+  //     if (budgetUsed + tokens <= MICROCOMPACT_PROTECTION_BUDGET) {
+  //       budgetUsed += tokens
+  //       continue
+  //     }
+  //     candidates.push({ msgIdx: i, partIdx: j, tokens })
+  //     prunableTokens += tokens
+  //   }
+  // }
+  //
+  // if (prunableTokens < MICROCOMPACT_HYSTERESIS) return msgs
+  //
+  // for (const c of candidates) {
+  //   const part = msgs[c.msgIdx].parts[c.partIdx]
+  //   if (part.type !== "tool" || part.state.status !== "completed") continue
+  //   part.state.output = ""
+  //   part.state.time.compacted = -1
+  //   part.state.attachments = undefined
+  // }
 
   return msgs
 }
