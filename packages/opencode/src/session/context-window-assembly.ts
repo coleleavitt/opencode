@@ -71,6 +71,7 @@ export function assembleContextWindow(sessionID: SessionID, k: number): MessageV
 
 const MICROCOMPACT_KEEP = 5
 const MICROCOMPACT_PROTECTED = new Set(["skill"])
+const MICROCOMPACT_MIN_MESSAGES = 80
 
 /**
  * In-memory only — clears old tool outputs before LLM serialization.
@@ -78,8 +79,11 @@ const MICROCOMPACT_PROTECTED = new Set(["skill"])
  * Older results get `time.compacted = -1` so toModelMessages emits
  * "[Old tool result content cleared]" instead of the full output.
  * DB and TUI are unaffected — assembleContextWindow loads fresh each iteration.
+ * Skips sessions with fewer than MICROCOMPACT_MIN_MESSAGES to avoid
+ * clearing tool outputs in short-lived subagent sessions.
  */
 export function microcompact(msgs: MessageV2.WithParts[], keepRecent = MICROCOMPACT_KEEP): MessageV2.WithParts[] {
+  if (msgs.length < MICROCOMPACT_MIN_MESSAGES) return msgs
   const counts = new Map<string, number>()
   for (let i = msgs.length - 1; i >= 0; i--) {
     for (let j = msgs[i].parts.length - 1; j >= 0; j--) {
