@@ -1,0 +1,683 @@
+# Instincts generated from https://github.com/coleleavitt/opencode
+# Generated: 2026-07-17T18:55:40.698Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: opencode-commit-conventional
+trigger: "when writing a commit message"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Commit Conventional
+
+## Action
+
+Use conventional commit format with prefixes: fix, chore, refactor, test, feat
+
+## Evidence
+
+- 100 commits analyzed
+- Detected conventional commit pattern
+- Examples: test(app): route prompt e2e through mock llm (#20383), perf(review): defer offscreen diff mounts (#20469)
+
+---
+id: opencode-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Commit Length
+
+## Action
+
+Write moderate-length commit messages (~54 characters)
+
+## Evidence
+
+- Average commit message length: 54 chars
+- Based on 100 commits
+
+---
+id: opencode-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: opencode-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: opencode-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: opencode-arch-type-based
+trigger: "when adding new code"
+confidence: 0.8
+domain: architecture
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Arch Type Based
+
+## Action
+
+Place code in the appropriate type folder (components/, services/, utils/, etc.)
+
+## Evidence
+
+- Type-based module organization detected
+- Folders: 
+
+---
+id: opencode-test-framework
+trigger: "when writing tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Test Framework
+
+## Action
+
+Use playwright as the test framework
+
+## Evidence
+
+- Test framework detected: playwright
+- File pattern: *.spec.ts
+
+---
+id: opencode-test-naming
+trigger: "when creating a test file"
+confidence: 0.85
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Test Naming
+
+## Action
+
+Name test files using the pattern: *.spec.ts
+
+## Evidence
+
+- File pattern: *.spec.ts
+- Consistent across test files
+
+---
+id: opencode-test-types
+trigger: "when planning tests for a feature"
+confidence: 0.7
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Test Types
+
+## Action
+
+Write unit, integration, e2e tests to match project standards
+
+## Evidence
+
+- Test types detected: unit, integration, e2e
+- Coverage config: no
+
+---
+id: opencode-workflow-feature-development
+trigger: "when implementing a new feature"
+confidence: 0.7
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Workflow Feature Development
+
+## Action
+
+Follow the feature-development workflow:
+1. Add feature implementation
+2. Add tests for feature
+3. Update documentation
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~4x per month
+- Files: packages/opencode/src/plugin/github-copilot/*, packages/opencode/src/plugin/*, packages/opencode/src/provider/*
+
+---
+id: opencode-workflow-refactoring
+trigger: "when refactoring code"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Workflow Refactoring
+
+## Action
+
+Follow the refactoring workflow:
+1. Ensure tests pass before refactor
+2. Refactor code structure
+3. Verify tests still pass
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~7x per month
+- Files: src/**/*
+
+---
+id: opencode-workflow-test-suite-addition-or-update
+trigger: "when doing test suite addition or update"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Workflow Test Suite Addition Or Update
+
+## Action
+
+Follow the test-suite-addition-or-update workflow:
+1. Edit or add implementation files (e.g., src/...)
+2. Edit or add corresponding test files (e.g., test/..., e2e/...)
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~8x per month
+- Files: packages/opencode/src/account/index.ts, packages/opencode/test/account/service.test.ts, packages/opencode/src/file/time.ts
+
+---
+id: opencode-workflow-chore-generate-or-autogen
+trigger: "when doing chore generate or autogen"
+confidence: 0.75
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Workflow Chore Generate Or Autogen
+
+## Action
+
+Follow the chore-generate-or-autogen workflow:
+1. Edit source/config/test files
+2. Run code generation or update generated files
+3. Commit generated file changes
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~5x per month
+- Files: packages/opencode/src/provider/provider.ts, packages/app/e2e/prompt/prompt-async.spec.ts, packages/app/e2e/prompt/prompt.spec.ts
+
+---
+id: opencode-workflow-refactor-implementation-and-tests
+trigger: "when doing refactor implementation and tests"
+confidence: 0.7
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Workflow Refactor Implementation And Tests
+
+## Action
+
+Follow the refactor-implementation-and-tests workflow:
+1. Refactor implementation files (e.g., src/...)
+2. Update or refactor corresponding test files (e.g., test/...)
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~4x per month
+- Files: packages/opencode/src/account/index.ts, packages/opencode/test/account/service.test.ts, packages/opencode/src/session/prompt.ts
+
+---
+id: opencode-workflow-feature-or-fix-across-implementation-and-tests
+trigger: "when doing feature or fix across implementation and tests"
+confidence: 0.65
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Workflow Feature Or Fix Across Implementation And Tests
+
+## Action
+
+Follow the feature-or-fix-across-implementation-and-tests workflow:
+1. Edit or add implementation files
+2. Edit or add corresponding test files
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~3x per month
+- Files: packages/opencode/src/account/index.ts, packages/opencode/test/account/service.test.ts, packages/opencode/src/file/time.ts
+
+---
+id: opencode-workflow-plugin-or-provider-extension
+trigger: "when doing plugin or provider extension"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/coleleavitt/opencode
+---
+
+# Opencode Workflow Plugin Or Provider Extension
+
+## Action
+
+Follow the plugin-or-provider-extension workflow:
+1. Edit or add plugin/provider implementation files
+2. Edit or add corresponding test files
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: packages/opencode/src/plugin/index.ts, packages/opencode/src/plugin/install.ts, packages/opencode/src/plugin/loader.ts
+
+---
+id: opencode-instinct-file-naming-camelcase
+trigger: "When creating or renaming a file in the codebase"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct File Naming Camelcase
+
+## Action
+
+Use camelCase for file names
+
+## Evidence
+
+- Pattern: namingConventions.files = camelCase
+- Examples in packages/opencode/src/account/index.ts
+
+---
+id: opencode-instinct-function-naming-camelcase
+trigger: "When defining a function"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Function Naming Camelcase
+
+## Action
+
+Use camelCase for function names
+
+## Evidence
+
+- Pattern: namingConventions.functions = camelCase
+
+---
+id: opencode-instinct-class-naming-pascalcase
+trigger: "When defining a class"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Class Naming Pascalcase
+
+## Action
+
+Use PascalCase for class names
+
+## Evidence
+
+- Pattern: namingConventions.classes = PascalCase
+
+---
+id: opencode-instinct-constant-naming-screaming-snake-case
+trigger: "When declaring a constant"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Constant Naming Screaming Snake Case
+
+## Action
+
+Use SCREAMING_SNAKE_CASE for constant names
+
+## Evidence
+
+- Pattern: namingConventions.constants = SCREAMING_SNAKE_CASE
+
+---
+id: opencode-instinct-import-style-relative
+trigger: "When importing modules within the codebase"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Import Style Relative
+
+## Action
+
+Use relative import paths
+
+## Evidence
+
+- Pattern: importStyle = relative
+
+---
+id: opencode-instinct-export-style-named
+trigger: "When exporting modules or functions"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Export Style Named
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern: exportStyle = named
+
+---
+id: opencode-instinct-test-file-pattern
+trigger: "When creating a test file"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Test File Pattern
+
+## Action
+
+Name test files with the pattern *.spec.ts
+
+## Evidence
+
+- Pattern: testing.filePattern = *.spec.ts
+- Examples: packages/app/e2e/performance/playwright.config.ts
+
+---
+id: opencode-instinct-test-framework-playwright
+trigger: "When writing end-to-end or integration tests"
+confidence: 0.9
+domain: testing
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Test Framework Playwright
+
+## Action
+
+Use Playwright as the testing framework
+
+## Evidence
+
+- Pattern: testing.framework = playwright
+- Examples: packages/app/e2e/performance/playwright.config.ts
+
+---
+id: opencode-instinct-test-types
+trigger: "When writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Test Types
+
+## Action
+
+Include unit, integration, and e2e test types as appropriate
+
+## Evidence
+
+- Pattern: testing.testTypes includes unit, integration, e2e
+
+---
+id: opencode-instinct-git-commit-conventional
+trigger: "When writing a commit message"
+confidence: 0.9
+domain: git
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Git Commit Conventional
+
+## Action
+
+Use conventional commit prefixes (fix, chore, refactor, test, feat)
+
+## Evidence
+
+- Pattern: commits.prefixes
+- Examples: fix(account): coalesce concurrent console token refreshes (#20503)
+
+---
+id: opencode-instinct-git-commit-length
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Git Commit Length
+
+## Action
+
+Keep the commit message around 54 characters on average
+
+## Evidence
+
+- Pattern: commits.averageLength = 54
+
+---
+id: opencode-instinct-git-commit-scope
+trigger: "When writing a commit message for a specific module or feature"
+confidence: 0.85
+domain: git
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Git Commit Scope
+
+## Action
+
+Include the scope in parentheses after the prefix (e.g., fix(account): ...)
+
+## Evidence
+
+- Examples: fix(account): coalesce concurrent console token refreshes (#20503)
+
+---
+id: opencode-instinct-workflow-test-suite-addition-or-update
+trigger: "When developing a new feature or fixing a bug and needing to ensure it is properly tested"
+confidence: 0.95
+domain: workflow
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Workflow Test Suite Addition Or Update
+
+## Action
+
+Edit or add implementation files and corresponding test files
+
+## Evidence
+
+- Workflow: test-suite-addition-or-update
+- Files: packages/opencode/src/account/index.ts, packages/opencode/test/account/service.test.ts
+
+---
+id: opencode-instinct-workflow-chore-generate-or-autogen
+trigger: "When modifying files that require regeneration of outputs (e.g., types, migrations, tests, configs)"
+confidence: 0.92
+domain: workflow
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Workflow Chore Generate Or Autogen
+
+## Action
+
+Run code generation or update generated files and commit the changes
+
+## Evidence
+
+- Workflow: chore-generate-or-autogen
+- Files: packages/opencode/src/provider/provider.ts
+
+---
+id: opencode-instinct-workflow-refactor-implementation-and-tests
+trigger: "When refactoring a module, service, or API and needing to keep tests in sync"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Workflow Refactor Implementation And Tests
+
+## Action
+
+Refactor implementation files and update or refactor corresponding test files
+
+## Evidence
+
+- Workflow: refactor-implementation-and-tests
+- Files: packages/opencode/src/account/index.ts, packages/opencode/test/account/service.test.ts
+
+---
+id: opencode-instinct-workflow-feature-or-fix-across-implementation-and-tests
+trigger: "When adding a new capability or fixing a bug and ensuring it is tested"
+confidence: 0.88
+domain: workflow
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Workflow Feature Or Fix Across Implementation And Tests
+
+## Action
+
+Edit or add implementation files and corresponding test files
+
+## Evidence
+
+- Workflow: feature-or-fix-across-implementation-and-tests
+- Files: packages/opencode/src/file/time.ts, packages/opencode/test/file/time.test.ts
+
+---
+id: opencode-instinct-workflow-plugin-or-provider-extension
+trigger: "When adding a new provider, plugin, or extending existing plugin/provider logic"
+confidence: 0.85
+domain: workflow
+source: repo-analysis
+source_repo: coleleavitt/opencode
+---
+
+# Opencode Instinct Workflow Plugin Or Provider Extension
+
+## Action
+
+Edit or add plugin/provider implementation files and corresponding test files
+
+## Evidence
+
+- Workflow: plugin-or-provider-extension
+- Files: packages/opencode/src/plugin/index.ts, packages/opencode/test/plugin/loader-shared.test.ts
+
